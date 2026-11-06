@@ -10,21 +10,26 @@ import aiohttp
 from dotenv import load_dotenv
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-from pytgcalls import PyTgCalls, filters as call_filters
+from pytgcalls import filters as call_filters
 from pytgcalls.types import StreamEnded
+from player_pool import MultiCallPool
 
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 API_ID = int(os.getenv("API_ID", "0"))
 API_HASH = os.getenv("API_HASH", "")
-SESSION_STRING = os.getenv("SESSION_STRING", "")
+SESSION_STRINGS = [value.strip() for value in os.getenv("SESSION_STRINGS", "").split(",") if value.strip()]
 JAMENDO_CLIENT_ID = os.getenv("JAMENDO_CLIENT_ID", "")
 
-if not all((BOT_TOKEN, API_ID, API_HASH, SESSION_STRING, JAMENDO_CLIENT_ID)):
+if not all((BOT_TOKEN, API_ID, API_HASH, SESSION_STRINGS, JAMENDO_CLIENT_ID)):
     raise RuntimeError(
-        "Missing BOT_TOKEN, API_ID, API_HASH, SESSION_STRING or JAMENDO_CLIENT_ID in .env"
+        "Missing BOT_TOKEN, API_ID, API_HASH, SESSION_STRINGS or JAMENDO_CLIENT_ID in .env"
     )
+if len(SESSION_STRINGS) > 10:
+    raise RuntimeError("SESSION_STRINGS supports up to 10 separate authorized sessions.")
+if len(set(SESSION_STRINGS)) != len(SESSION_STRINGS):
+    raise RuntimeError("Each player must have a different SESSION_STRING. Do not repeat one.")
 
 BASE_DIR = Path(__file__).resolve().parent
 MEDIA_DIR = BASE_DIR / "media"
@@ -42,13 +47,16 @@ bot = Client(
     api_hash=API_HASH,
     bot_token=BOT_TOKEN,
 )
-user = Client(
-    "wellidkmusic_user",
-    api_id=API_ID,
-    api_hash=API_HASH,
-    session_string=SESSION_STRING,
-)
-calls = PyTgCalls(user)
+users = [
+    Client(
+        f"wellidkmusic_player_{index}",
+        api_id=API_ID,
+        api_hash=API_HASH,
+        session_string=session_string,
+    )
+    for index, session_string in enumerate(SESSION_STRINGS, start=1)
+]
+calls = MultiCallPool(users)
 
 queues = defaultdict(deque)
 players = {}
@@ -489,18 +497,27 @@ async def volume_command(_, message):
 
 
 async def main():
-    await user.start()
-    await bot.start()
-    await calls.start()
-    me = await bot.get_me()
-    log.info("Started as @%s", me.username)
-    print("WELLIDK MUSIC is running. Press Ctrl+C to stop.")
+    started_users = []
     try:
+        for player in users:
+            await player.start()
+            started_users.append(player)
+        await bot.start()
+        await calls.start()
+        me = await bot.get_me()
+        log.info("Started as @%s with %s independent player session(s)", me.username, len(users))
+        print("WELLIDK MUSIC is running. Press Ctrl+C to stop.")
         await asyncio.Event().wait()
     finally:
-        await calls.stop()
-        await bot.stop()
-        await user.stop()
+        try:
+            await calls.stop()
+        except Exception:
+            log.exception("Error while stopping voice clients")
+        if bot.is_connected:
+            await bot.stop()
+        for player in reversed(started_users):
+            if player.is_connected:
+                await player.stop()
 
 
 if __name__ == "__main__":
