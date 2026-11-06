@@ -319,7 +319,6 @@ async def play_command(_, message):
                 reply_markup=InlineKeyboardMarkup(rows),
             )
             search_cache[message.chat.id] = {str(x["id"]): x for x in results}
-            selection_messages[(message.chat.id, status.id)] = True
             return
         queues[message.chat.id].append(selected)
         if message.chat.id not in players:
@@ -335,7 +334,6 @@ async def play_command(_, message):
 
 
 search_cache = defaultdict(dict)
-selection_messages = {}
 
 
 @bot.on_callback_query(filters.regex(r"^choose:(\d+)$"))
