@@ -103,6 +103,7 @@ def render_player(chat_id: int) -> str:
         f"⏱ {fmt_time(elapsed)} {progress_bar(elapsed, duration)} {fmt_time(duration)}\n"
         f"⌛ Remaining: {fmt_time(remaining)}\n"
         f"🔊 Volume: {track.get('volume', 100)}%\n"
+        f"📄 [License]({track['license_url']}) · [Track source]({track['source_url']})\n"
         "━━━━━━━━━━━━━━━━━━"
     )
 
@@ -116,7 +117,6 @@ async def search_tracks(query: str):
         "search": query,
         "audioformat": "mp32",
         "include": "licenses",
-        "cc": "by,by-sa",
         "audiodlformat": "mp32",
     }
     timeout = aiohttp.ClientTimeout(total=20)
@@ -124,13 +124,21 @@ async def search_tracks(query: str):
         async with session.get(url, params=params) as response:
             response.raise_for_status()
             payload = await response.json()
-    return payload.get("results", [])
+    return [
+        track for track in payload.get("results", [])
+        if track.get("audiodownload_allowed") is True
+        and track.get("audiodownload")
+        and (
+            "/licenses/by/" in (track.get("license_ccurl") or "").lower()
+            or "/licenses/by-sa/" in (track.get("license_ccurl") or "").lower()
+        )
+    ]
 
 
 async def download_track(track: dict) -> Path:
-    download_url = track.get("audiodownload") or track.get("audio")
-    if not download_url:
-        raise RuntimeError("This track has no playable audio file.")
+    download_url = track.get("audiodownload")
+    if track.get("audiodownload_allowed") is not True or not download_url:
+        raise RuntimeError("The artist has not enabled downloads for this track.")
     file_path = MEDIA_DIR / (str(track["id"]) + ".mp3")
     if file_path.exists() and file_path.stat().st_size > 20_000:
         return file_path
@@ -178,6 +186,8 @@ async def start_track(chat_id: int, track: dict, message_id: int):
         "title": track.get("name", "Unknown title"),
         "artist": track.get("artist_name", "Unknown artist"),
         "duration": int(track.get("duration") or 0),
+        "license_url": track.get("license_ccurl", "https://creativecommons.org/licenses/by/4.0/"),
+        "source_url": track.get("shareurl") or track.get("shorturl") or "https://www.jamendo.com",
         "started_at": time.monotonic(),
         "message_id": message_id,
         "path": str(audio_path),
