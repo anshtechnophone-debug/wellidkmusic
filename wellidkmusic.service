@@ -1,0 +1,15 @@
+[Unit]
+Description=WELLIDK Telegram Music Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/wellidkmusic
+EnvironmentFile=/opt/wellidkmusic/.env
+ExecStart=/opt/wellidkmusic/.venv/bin/python /opt/wellidkmusic/bot.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
