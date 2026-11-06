@@ -262,7 +262,7 @@ async def play_next_unlocked(chat_id: int, message_id: int):
 
 
 @calls.on_update(call_filters.stream_end())
-async def on_stream_end(_: PyTgCalls, update: StreamEnded):
+async def on_stream_end(_: MultiCallPool, update: StreamEnded):
     chat_id = update.chat_id
     await stop_progress(chat_id)
     players.pop(chat_id, None)
