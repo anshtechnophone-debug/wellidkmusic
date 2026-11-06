@@ -6,7 +6,6 @@ import os
 from pathlib import Path
 
 import qrcode
-from cryptography.fernet import Fernet, InvalidToken
 from telethon import TelegramClient
 from telethon.errors import SessionPasswordNeededError
 from telethon.sessions import StringSession
@@ -15,7 +14,7 @@ log = logging.getLogger("wellidkmusic.accounts")
 
 
 class AccountManager:
-    """Owner-only QR login and encrypted storage for voice-player accounts."""
+    """Owner-only QR login with local plaintext session storage."""
 
     def __init__(self, bot, call_pool, api_id, api_hash, owner_id, data_dir):
         self.bot = bot
@@ -30,25 +29,9 @@ class AccountManager:
         except OSError:
             pass
         self.store_path = self.data_dir / "player_accounts.json"
-        self.key_path = self.data_dir / ".session_key"
-        self.fernet = self._load_cipher()
         self.clients = []
         self.accounts = {}
         self._login_lock = asyncio.Lock()
-
-    def _load_cipher(self):
-        if self.key_path.exists():
-            key = self.key_path.read_bytes()
-        else:
-            key = Fernet.generate_key()
-            descriptor = os.open(str(self.key_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            with os.fdopen(descriptor, "wb") as key_file:
-                key_file.write(key)
-        try:
-            self.key_path.chmod(0o600)
-        except OSError:
-            pass
-        return Fernet(key)
 
     def _read_store(self):
         if not self.store_path.exists():
@@ -83,16 +66,17 @@ class AccountManager:
         stored = self._read_store()
         for account_id, record in stored.items():
             try:
-                encrypted = record["session"].encode("ascii")
-                session = self.fernet.decrypt(encrypted).decode("utf-8")
+                session = record["session"]
+                if not isinstance(session, str) or not session:
+                    raise ValueError("Missing player session")
                 client = TelegramClient(StringSession(session), self.api_id, self.api_hash)
                 await client.start()
                 await self.call_pool.add_client(client)
                 self.clients.append(client)
                 self.accounts[str(account_id)] = record
                 log.info("Loaded saved voice-player account %s", account_id)
-            except (InvalidToken, KeyError, ValueError):
-                log.exception("Could not decrypt or load a saved player account")
+            except (KeyError, ValueError):
+                log.exception("Could not read or load a saved player account")
             except Exception:
                 log.exception("Could not start a saved player account %s", account_id)
 
@@ -150,11 +134,10 @@ class AccountManager:
                 return
 
             session_string = StringSession.save(client.session)
-            encrypted = self.fernet.encrypt(session_string.encode("utf-8")).decode("ascii")
             record = {
                 "username": me.username or "",
                 "first_name": me.first_name or "",
-                "session": encrypted,
+                "session": session_string,
             }
             await client.disconnect()
 
