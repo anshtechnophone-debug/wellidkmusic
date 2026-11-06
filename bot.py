@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import os
-import re
 import time
 from collections import defaultdict, deque
 from pathlib import Path
@@ -10,7 +9,6 @@ from typing import Optional
 import aiohttp
 from dotenv import load_dotenv
 from pyrogram import Client, filters
-from pyrogram.enums import ChatType
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from pytgcalls import PyTgCalls, filters as call_filters
 from pytgcalls.types import StreamEnded
@@ -22,7 +20,6 @@ API_ID = int(os.getenv("API_ID", "0"))
 API_HASH = os.getenv("API_HASH", "")
 SESSION_STRING = os.getenv("SESSION_STRING", "")
 JAMENDO_CLIENT_ID = os.getenv("JAMENDO_CLIENT_ID", "")
-OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 
 if not all((BOT_TOKEN, API_ID, API_HASH, SESSION_STRING, JAMENDO_CLIENT_ID)):
     raise RuntimeError(
@@ -95,7 +92,8 @@ def render_player(chat_id: int) -> str:
     if not track:
         return "🎵 Nothing is playing right now."
     duration = int(track.get("duration") or 0)
-    elapsed = min(duration, int(time.monotonic() - track["started_at"]))
+    elapsed_now = track.get("paused_elapsed", 0) if track.get("paused") else int(time.monotonic() - track["started_at"])
+    elapsed = min(duration, int(elapsed_now))
     remaining = max(0, duration - elapsed) if duration else 0
     return (
         "🎧 **WELLIDK MUSIC PLAYER**\n"
@@ -185,6 +183,7 @@ async def start_track(chat_id: int, track: dict, message_id: int):
         "path": str(audio_path),
         "volume": 100,
         "paused": False,
+        "paused_elapsed": 0,
     }
     await stop_progress(chat_id)
     progress_tasks[chat_id] = asyncio.create_task(update_progress(chat_id))
@@ -355,15 +354,14 @@ async def player_controls(_, query):
         if action == "pause":
             await calls.pause(chat_id)
             if chat_id in players:
+                players[chat_id]["paused_elapsed"] = int(time.monotonic() - players[chat_id]["started_at"])
                 players[chat_id]["paused"] = True
                 await query.answer("Paused")
         elif action == "resume":
             await calls.resume(chat_id)
             if chat_id in players:
+                players[chat_id]["started_at"] = time.monotonic() - players[chat_id].get("paused_elapsed", 0)
                 players[chat_id]["paused"] = False
-                players[chat_id]["started_at"] = time.monotonic() - int(
-                    players[chat_id].get("elapsed_before_pause", 0)
-                )
                 await query.answer("Resumed")
         elif action == "skip":
             await query.answer("Skipping")
@@ -407,6 +405,7 @@ async def player_controls(_, query):
 async def pause_command(_, message):
     await calls.pause(message.chat.id)
     if message.chat.id in players:
+        players[message.chat.id]["paused_elapsed"] = int(time.monotonic() - players[message.chat.id]["started_at"])
         players[message.chat.id]["paused"] = True
     await message.reply_text("⏸ Playback paused.")
 
@@ -415,6 +414,7 @@ async def pause_command(_, message):
 async def resume_command(_, message):
     await calls.resume(message.chat.id)
     if message.chat.id in players:
+        players[message.chat.id]["started_at"] = time.monotonic() - players[message.chat.id].get("paused_elapsed", 0)
         players[message.chat.id]["paused"] = False
     await message.reply_text("▶️ Playback resumed.")
 
