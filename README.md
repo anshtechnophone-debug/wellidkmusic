@@ -10,7 +10,7 @@ A Telegram group/channel voice-chat music bot using Pyrogram and PyTgCalls. Song
 - Inline player controls
 - Independent queue and controls for every group
 - Multiple simultaneous voice chats using separately authorized player sessions
-- Highest built-in PyTgCalls audio preset (Studio: 96 kHz stereo input)
+- FLAC downloads where available, plus the highest built-in PyTgCalls audio preset (Studio: 96 kHz stereo input)
 - Track progress display and automatic leave when a queue finishes
 
 ## Multiple groups at once
@@ -77,7 +77,7 @@ python bot.py
 
 ## Audio quality
 
-The player requests PyTgCalls' Studio preset (96 kHz, stereo) and uses the best source quality available from Jamendo's downloadable catalog. Actual sound quality is limited by the original track, Telegram's voice transport, and listeners' network/device audio. A higher preset cannot restore detail missing from the source.
+The player requests FLAC downloads from Jamendo and PyTgCalls' Studio preset (96 kHz, stereo). FLAC avoids another lossy MP3 encode, but cannot restore detail missing from the artist's original upload. Telegram's voice transport and listeners' network/device audio can still affect the sound.
 
 ## Notes
 
