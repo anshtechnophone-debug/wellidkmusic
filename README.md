@@ -31,8 +31,8 @@ cd wellidkmusic
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-sudo apt update
-sudo apt install -y ffmpeg
+apt update
+apt install -y ffmpeg
 cp .env.example .env
 nano .env
 ```
