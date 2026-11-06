@@ -1,0 +1,499 @@
+import asyncio
+import logging
+import os
+import re
+import time
+from collections import defaultdict, deque
+from pathlib import Path
+from typing import Optional
+
+import aiohttp
+from dotenv import load_dotenv
+from pyrogram import Client, filters
+from pyrogram.enums import ChatType
+from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from pytgcalls import PyTgCalls, filters as call_filters
+from pytgcalls.types import StreamEnded
+
+load_dotenv()
+
+BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+API_ID = int(os.getenv("API_ID", "0"))
+API_HASH = os.getenv("API_HASH", "")
+SESSION_STRING = os.getenv("SESSION_STRING", "")
+JAMENDO_CLIENT_ID = os.getenv("JAMENDO_CLIENT_ID", "")
+OWNER_ID = int(os.getenv("OWNER_ID", "0"))
+
+if not all((BOT_TOKEN, API_ID, API_HASH, SESSION_STRING, JAMENDO_CLIENT_ID)):
+    raise RuntimeError(
+        "Missing BOT_TOKEN, API_ID, API_HASH, SESSION_STRING or JAMENDO_CLIENT_ID in .env"
+    )
+
+BASE_DIR = Path(__file__).resolve().parent
+MEDIA_DIR = BASE_DIR / "media"
+MEDIA_DIR.mkdir(exist_ok=True)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+)
+log = logging.getLogger("wellidkmusic")
+
+bot = Client(
+    "wellidkmusic_bot",
+    api_id=API_ID,
+    api_hash=API_HASH,
+    bot_token=BOT_TOKEN,
+)
+user = Client(
+    "wellidkmusic_user",
+    api_id=API_ID,
+    api_hash=API_HASH,
+    session_string=SESSION_STRING,
+)
+calls = PyTgCalls(user)
+
+queues = defaultdict(deque)
+players = {}
+progress_tasks = {}
+locks = defaultdict(asyncio.Lock)
+
+
+def fmt_time(seconds: Optional[float]) -> str:
+    if seconds is None:
+        return "LIVE"
+    seconds = max(0, int(seconds))
+    return f"{seconds // 60:02d}:{seconds % 60:02d}"
+
+
+def progress_bar(position: float, duration: int, width: int = 12) -> str:
+    if duration <= 0:
+        return "🔴 LIVE"
+    filled = min(width, int(width * position / duration))
+    return "━" * filled + "●" + "─" * (width - filled)
+
+
+def player_keyboard():
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("⏸ Pause", callback_data="player:pause"),
+                InlineKeyboardButton("▶️ Resume", callback_data="player:resume"),
+                InlineKeyboardButton("⏭ Skip", callback_data="player:skip"),
+            ],
+            [
+                InlineKeyboardButton("🔉 -10", callback_data="player:vol_down"),
+                InlineKeyboardButton("🔊 +10", callback_data="player:vol_up"),
+                InlineKeyboardButton("⏹ Stop", callback_data="player:stop"),
+            ],
+        ]
+    )
+
+
+def render_player(chat_id: int) -> str:
+    track = players.get(chat_id)
+    if not track:
+        return "🎵 Nothing is playing right now."
+    duration = int(track.get("duration") or 0)
+    elapsed = min(duration, int(time.monotonic() - track["started_at"]))
+    remaining = max(0, duration - elapsed) if duration else 0
+    return (
+        "🎧 **WELLIDK MUSIC PLAYER**\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        f"🎵 **{track['title']}**\n"
+        f"👤 Artist: {track['artist']}\n"
+        f"⏱ {fmt_time(elapsed)} {progress_bar(elapsed, duration)} {fmt_time(duration)}\n"
+        f"⌛ Remaining: {fmt_time(remaining)}\n"
+        f"🔊 Volume: {track.get('volume', 100)}%\n"
+        "━━━━━━━━━━━━━━━━━━"
+    )
+
+
+async def search_tracks(query: str):
+    url = "https://api.jamendo.com/v3.0/tracks/"
+    params = {
+        "client_id": JAMENDO_CLIENT_ID,
+        "format": "json",
+        "limit": 8,
+        "search": query,
+        "audioformat": "mp32",
+        "include": "licenses",
+        "cc": "by,by-sa",
+        "audiodlformat": "mp32",
+    }
+    timeout = aiohttp.ClientTimeout(total=20)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.get(url, params=params) as response:
+            response.raise_for_status()
+            payload = await response.json()
+    return payload.get("results", [])
+
+
+async def download_track(track: dict) -> Path:
+    download_url = track.get("audiodownload") or track.get("audio")
+    if not download_url:
+        raise RuntimeError("This track has no playable audio file.")
+    file_path = MEDIA_DIR / (str(track["id"]) + ".mp3")
+    if file_path.exists() and file_path.stat().st_size > 20_000:
+        return file_path
+
+    timeout = aiohttp.ClientTimeout(total=180)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.get(download_url) as response:
+            response.raise_for_status()
+            with file_path.open("wb") as output:
+                async for chunk in response.content.iter_chunked(256 * 1024):
+                    output.write(chunk)
+    if file_path.stat().st_size < 20_000:
+        file_path.unlink(missing_ok=True)
+        raise RuntimeError("The audio download was incomplete.")
+    return file_path
+
+
+async def update_progress(chat_id: int):
+    while chat_id in players:
+        track = players[chat_id]
+        try:
+            await bot.edit_message_text(
+                chat_id,
+                track["message_id"],
+                render_player(chat_id),
+                reply_markup=player_keyboard(),
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            pass
+        await asyncio.sleep(8)
+
+
+async def stop_progress(chat_id: int):
+    task = progress_tasks.pop(chat_id, None)
+    if task and task is not asyncio.current_task():
+        task.cancel()
+
+
+async def start_track(chat_id: int, track: dict, message_id: int):
+    audio_path = await download_track(track)
+    await calls.play(chat_id, str(audio_path))
+    players[chat_id] = {
+        "id": str(track["id"]),
+        "title": track.get("name", "Unknown title"),
+        "artist": track.get("artist_name", "Unknown artist"),
+        "duration": int(track.get("duration") or 0),
+        "started_at": time.monotonic(),
+        "message_id": message_id,
+        "path": str(audio_path),
+        "volume": 100,
+        "paused": False,
+    }
+    await stop_progress(chat_id)
+    progress_tasks[chat_id] = asyncio.create_task(update_progress(chat_id))
+    await bot.edit_message_text(
+        chat_id,
+        message_id,
+        render_player(chat_id),
+        reply_markup=player_keyboard(),
+        disable_web_page_preview=True,
+    )
+
+
+async def play_next(chat_id: int, message_id: Optional[int] = None):
+    async with locks[chat_id]:
+        if not queues[chat_id]:
+            await stop_progress(chat_id)
+            players.pop(chat_id, None)
+            try:
+                await calls.leave_call(chat_id)
+            except Exception:
+                pass
+            if message_id:
+                await bot.edit_message_text(
+                    chat_id,
+                    message_id,
+                    "🏁 Queue finished. I left the voice chat."
+                )
+            return
+
+        track = queues[chat_id].popleft()
+        status_message_id = message_id or track.get("status_message_id")
+        if not status_message_id:
+            sent = await bot.send_message(chat_id, "⏳ Loading next track...")
+            status_message_id = sent.id
+        try:
+            await start_track(chat_id, track, status_message_id)
+        except Exception as exc:
+            log.exception("Could not start queued track")
+            await bot.send_message(chat_id, f"⚠️ Could not play **{track.get('name', 'track')}**: {exc}")
+            await play_next_unlocked(chat_id, status_message_id)
+
+
+async def play_next_unlocked(chat_id: int, message_id: int):
+    if not queues[chat_id]:
+        await stop_progress(chat_id)
+        players.pop(chat_id, None)
+        try:
+            await calls.leave_call(chat_id)
+        except Exception:
+            pass
+        return
+    track = queues[chat_id].popleft()
+    try:
+        await start_track(chat_id, track, message_id)
+    except Exception:
+        log.exception("Could not start next queued track")
+        await play_next_unlocked(chat_id, message_id)
+
+
+@calls.on_update(call_filters.stream_end())
+async def on_stream_end(_: PyTgCalls, update: StreamEnded):
+    chat_id = update.chat_id
+    await stop_progress(chat_id)
+    players.pop(chat_id, None)
+    await play_next(chat_id)
+
+
+@bot.on_message(filters.command("start"))
+async def start_command(_, message):
+    await message.reply_text(
+        "🎧 **WELLIDK MUSIC**\n\n"
+        "Play Creative Commons music in your group's or channel's active voice chat.\n\n"
+        "**Commands**\n"
+        "/play <song name> — search licensed tracks\n"
+        "/pause /resume /skip /stop\n"
+        "/queue /np /volume <1-200>\n"
+        "/help — setup and commands",
+        disable_web_page_preview=True,
+    )
+
+
+@bot.on_message(filters.command("help"))
+async def help_command(_, message):
+    await message.reply_text(
+        "**🎵 WELLIDK MUSIC HELP**\n\n"
+        "• /play <name> — search and play CC BY / BY-SA music\n"
+        "• /pause — pause playback\n"
+        "• /resume — resume playback\n"
+        "• /skip — skip current track\n"
+        "• /stop — clear queue and leave voice chat\n"
+        "• /queue — show upcoming tracks\n"
+        "• /np — show the current player\n"
+        "• /volume <1-200> — change volume\n\n"
+        "The group's or channel's voice chat must already be active. "
+        "The assistant account must be able to join and speak.",
+        disable_web_page_preview=True,
+    )
+
+
+@bot.on_message(filters.command("play"))
+async def play_command(_, message):
+    if len(message.command) < 2:
+        return await message.reply_text("Usage: /play <song name>")
+    query = " ".join(message.command[1:]).strip()
+    status = await message.reply_text(f"🔎 Searching licensed tracks for **{query}**...")
+    try:
+        results = await search_tracks(query)
+        if not results:
+            return await status.edit_text("No matching Creative Commons tracks found. Try another title or artist.")
+        if len(results) == 1:
+            selected = results[0]
+        else:
+            rows = []
+            for item in results[:8]:
+                title = item.get("name", "Unknown")
+                artist = item.get("artist_name", "Unknown artist")
+                rows.append([InlineKeyboardButton(
+                    f"{title[:35]} — {artist[:20]}",
+                    callback_data=f"choose:{item['id']}"
+                )])
+            await status.edit_text(
+                "🎼 **Choose a track**\nOnly tracks offered under CC BY / CC BY-SA are listed.",
+                reply_markup=InlineKeyboardMarkup(rows),
+            )
+            search_cache[message.chat.id] = {str(x["id"]): x for x in results}
+            selection_messages[(message.chat.id, status.id)] = True
+            return
+        queues[message.chat.id].append(selected)
+        if message.chat.id not in players:
+            await status.edit_text("⏳ Preparing your track...")
+            await play_next(message.chat.id, status.id)
+        else:
+            await status.edit_text(
+                f"➕ Added to queue: **{selected.get('name')}** — {selected.get('artist_name')}"
+            )
+    except Exception as exc:
+        log.exception("Search/play failed")
+        await status.edit_text(f"❌ Couldn't search or play that track: {exc}")
+
+
+search_cache = defaultdict(dict)
+selection_messages = {}
+
+
+@bot.on_callback_query(filters.regex(r"^choose:(\d+)$"))
+async def choose_track(_, query):
+    chat_id = query.message.chat.id
+    track_id = query.matches[0].group(1)
+    track = search_cache.get(chat_id, {}).get(track_id)
+    if not track:
+        return await query.answer("Search expired. Run /play again.", show_alert=True)
+    await query.answer("Added to queue")
+    queues[chat_id].append(track)
+    if chat_id not in players:
+        await query.message.edit_text("⏳ Preparing your selected track...")
+        await play_next(chat_id, query.message.id)
+    else:
+        await query.message.edit_text(
+            f"➕ Added to queue: **{track.get('name')}** — {track.get('artist_name')}"
+        )
+
+
+@bot.on_callback_query(filters.regex(r"^player:(pause|resume|skip|stop|vol_down|vol_up)$"))
+async def player_controls(_, query):
+    chat_id = query.message.chat.id
+    action = query.matches[0].group(1)
+    try:
+        if action == "pause":
+            await calls.pause(chat_id)
+            if chat_id in players:
+                players[chat_id]["paused"] = True
+                await query.answer("Paused")
+        elif action == "resume":
+            await calls.resume(chat_id)
+            if chat_id in players:
+                players[chat_id]["paused"] = False
+                players[chat_id]["started_at"] = time.monotonic() - int(
+                    players[chat_id].get("elapsed_before_pause", 0)
+                )
+                await query.answer("Resumed")
+        elif action == "skip":
+            await query.answer("Skipping")
+            try:
+                await calls.leave_call(chat_id)
+            except Exception:
+                pass
+            await stop_progress(chat_id)
+            players.pop(chat_id, None)
+            await play_next(chat_id)
+        elif action == "stop":
+            queues[chat_id].clear()
+            await stop_progress(chat_id)
+            players.pop(chat_id, None)
+            try:
+                await calls.leave_call(chat_id)
+            except Exception:
+                pass
+            await query.message.edit_text("⏹ Playback stopped and queue cleared.")
+            await query.answer("Stopped")
+            return
+        elif action in ("vol_down", "vol_up"):
+            if chat_id not in players:
+                return await query.answer("Nothing is playing.", show_alert=True)
+            current = players[chat_id]["volume"]
+            volume = max(1, min(200, current + (-10 if action == "vol_down" else 10)))
+            await calls.change_volume_call(chat_id, volume)
+            players[chat_id]["volume"] = volume
+            await query.answer(f"Volume: {volume}%")
+        await bot.edit_message_text(
+            chat_id,
+            query.message.id,
+            render_player(chat_id),
+            reply_markup=player_keyboard(),
+        )
+    except Exception as exc:
+        await query.answer(f"Action failed: {exc}", show_alert=True)
+
+
+@bot.on_message(filters.command("pause"))
+async def pause_command(_, message):
+    await calls.pause(message.chat.id)
+    if message.chat.id in players:
+        players[message.chat.id]["paused"] = True
+    await message.reply_text("⏸ Playback paused.")
+
+
+@bot.on_message(filters.command("resume"))
+async def resume_command(_, message):
+    await calls.resume(message.chat.id)
+    if message.chat.id in players:
+        players[message.chat.id]["paused"] = False
+    await message.reply_text("▶️ Playback resumed.")
+
+
+@bot.on_message(filters.command("skip"))
+async def skip_command(_, message):
+    chat_id = message.chat.id
+    try:
+        await calls.leave_call(chat_id)
+    except Exception:
+        pass
+    await stop_progress(chat_id)
+    players.pop(chat_id, None)
+    await play_next(chat_id)
+    await message.reply_text("⏭ Skipped.")
+
+
+@bot.on_message(filters.command("stop"))
+async def stop_command(_, message):
+    chat_id = message.chat.id
+    queues[chat_id].clear()
+    await stop_progress(chat_id)
+    players.pop(chat_id, None)
+    try:
+        await calls.leave_call(chat_id)
+    except Exception:
+        pass
+    await message.reply_text("⏹ Stopped playback and cleared the queue.")
+
+
+@bot.on_message(filters.command("queue"))
+async def queue_command(_, message):
+    chat_id = message.chat.id
+    upcoming = list(queues[chat_id])
+    if not upcoming:
+        return await message.reply_text("📭 The queue is empty.")
+    lines = [f"{i}. {x.get('name')} — {x.get('artist_name')}" for i, x in enumerate(upcoming[:15], 1)]
+    await message.reply_text("📜 **UP NEXT**\n" + "\n".join(lines))
+
+
+@bot.on_message(filters.command("np"))
+async def np_command(_, message):
+    chat_id = message.chat.id
+    if chat_id not in players:
+        return await message.reply_text("🎵 Nothing is playing.")
+    await message.reply_text(
+        render_player(chat_id),
+        reply_markup=player_keyboard(),
+        disable_web_page_preview=True,
+    )
+
+
+@bot.on_message(filters.command("volume"))
+async def volume_command(_, message):
+    if len(message.command) < 2 or not message.command[1].isdigit():
+        return await message.reply_text("Usage: /volume <1-200>")
+    volume = max(1, min(200, int(message.command[1])))
+    chat_id = message.chat.id
+    if chat_id not in players:
+        return await message.reply_text("Nothing is playing right now.")
+    await calls.change_volume_call(chat_id, volume)
+    players[chat_id]["volume"] = volume
+    await message.reply_text(f"🔊 Volume set to {volume}%.")
+
+
+async def main():
+    await user.start()
+    await bot.start()
+    await calls.start()
+    me = await bot.get_me()
+    log.info("Started as @%s", me.username)
+    print("WELLIDK MUSIC is running. Press Ctrl+C to stop.")
+    try:
+        await asyncio.Event().wait()
+    finally:
+        await calls.stop()
+        await bot.stop()
+        await user.stop()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
