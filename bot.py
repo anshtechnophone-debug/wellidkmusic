@@ -123,9 +123,9 @@ async def search_tracks(query: str):
         "format": "json",
         "limit": 8,
         "search": query,
-        "audioformat": "mp32",
+        "audioformat": "flac",
         "include": "licenses",
-        "audiodlformat": "mp32",
+        "audiodlformat": "flac",
     }
     timeout = aiohttp.ClientTimeout(total=20)
     async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -147,7 +147,7 @@ async def download_track(track: dict) -> Path:
     download_url = track.get("audiodownload")
     if track.get("audiodownload_allowed") is not True or not download_url:
         raise RuntimeError("The artist has not enabled downloads for this track.")
-    file_path = MEDIA_DIR / (str(track["id"]) + ".mp3")
+    file_path = MEDIA_DIR / (str(track["id"]) + ".flac")
     if file_path.exists() and file_path.stat().st_size > 20_000:
         return file_path
 
