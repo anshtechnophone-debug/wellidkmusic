@@ -3,7 +3,6 @@ TgCrypto==1.2.5
 py-tgcalls==2.2.11
 Telethon==1.42.0
 qrcode[pil]>=8.0
-cryptography>=44.0
 yt-dlp>=2025.1.15
 python-dotenv>=1.0.1
 aiohttp>=3.10.0
