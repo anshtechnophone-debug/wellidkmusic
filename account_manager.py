@@ -104,7 +104,7 @@ class AccountManager:
         if message.chat.type != "private":
             return await message.reply_text("For account safety, use /newaccount in the bot's private chat.")
         if len(self.call_pool.clients) >= 10:
-            return await message.reply_text("The total player-account limit is 10. Remove a player session before adding another.")
+            return await message.reply_text("The total player-account limit is 10.")
         if self._login_lock.locked():
             return await message.reply_text("An account connection is already in progress.")
         async with self._login_lock:
