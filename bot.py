@@ -13,6 +13,7 @@ from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from pytgcalls import filters as call_filters
 from pytgcalls.types import StreamEnded
 from player_pool import MultiCallPool
+from account_manager import AccountManager
 
 load_dotenv()
 
@@ -22,9 +23,9 @@ API_HASH = os.getenv("API_HASH", "")
 SESSION_STRINGS = [value.strip() for value in os.getenv("SESSION_STRINGS", "").split(",") if value.strip()]
 JAMENDO_CLIENT_ID = os.getenv("JAMENDO_CLIENT_ID", "")
 
-if not all((BOT_TOKEN, API_ID, API_HASH, SESSION_STRINGS, JAMENDO_CLIENT_ID)):
+if not all((BOT_TOKEN, API_ID, API_HASH, JAMENDO_CLIENT_ID)):
     raise RuntimeError(
-        "Missing BOT_TOKEN, API_ID, API_HASH, SESSION_STRINGS or JAMENDO_CLIENT_ID in .env"
+        "Missing BOT_TOKEN, API_ID, API_HASH or JAMENDO_CLIENT_ID in .env"
     )
 if len(SESSION_STRINGS) > 10:
     raise RuntimeError("SESSION_STRINGS supports up to 10 separate authorized sessions.")
@@ -57,6 +58,25 @@ users = [
     for index, session_string in enumerate(SESSION_STRINGS, start=1)
 ]
 calls = MultiCallPool(users)
+account_manager = AccountManager(
+    bot=bot,
+    call_pool=calls,
+    api_id=API_ID,
+    api_hash=API_HASH,
+    owner_id=os.getenv("OWNER_ID", ""),
+    data_dir=BASE_DIR / "data",
+)
+
+
+@bot.on_message(filters.command("newaccount") & filters.private)
+async def new_account_command(_, message):
+    await account_manager.handle_new_account(_, message)
+
+
+@bot.on_message(filters.command("accounts") & filters.private)
+async def accounts_command(_, message):
+    await account_manager.handle_accounts(_, message)
+
 
 queues = defaultdict(deque)
 players = {}
@@ -503,9 +523,10 @@ async def main():
             await player.start()
             started_users.append(player)
         await bot.start()
+        await account_manager.load_existing()
         await calls.start()
         me = await bot.get_me()
-        log.info("Started as @%s with %s independent player session(s)", me.username, len(users))
+        log.info("Started as @%s with %s voice-player account(s)", me.username, len(calls.clients))
         print("WELLIDK MUSIC is running. Press Ctrl+C to stop.")
         await asyncio.Event().wait()
     finally:
@@ -515,6 +536,12 @@ async def main():
             log.exception("Error while stopping voice clients")
         if bot.is_connected:
             await bot.stop()
+        for player in reversed(account_manager.clients):
+            try:
+                if player.is_connected():
+                    await player.disconnect()
+            except Exception:
+                log.exception("Error while disconnecting a saved player account")
         for player in reversed(started_users):
             if player.is_connected:
                 await player.stop()
