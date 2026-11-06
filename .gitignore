@@ -7,3 +7,4 @@ venv/
 *.session-journal
 media/
 logs/
+data/
