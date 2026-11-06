@@ -303,6 +303,11 @@ async def start_command(_, message):
     )
 
 
+@bot.on_message(filters.command("myid") & filters.private)
+async def myid_command(_, message):
+    await message.reply_text(f"Your Telegram user ID: `{message.from_user.id}`")
+
+
 @bot.on_message(filters.command("help"))
 async def help_command(_, message):
     await message.reply_text(
