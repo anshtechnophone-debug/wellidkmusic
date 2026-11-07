@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import json
 from datetime import datetime, timedelta, timezone
 import os
 import time
@@ -161,25 +162,86 @@ def progress_bar(position: float, duration: int, width: int = 12) -> str:
     return "━" * filled + "●" + "─" * (width - filled)
 
 
-def player_keyboard():
-    return InlineKeyboardMarkup(
-        [
+def player_keyboard(chat_id: int):
+    track = players.get(chat_id, {})
+    paused = bool(track.get("paused"))
+    toggle = {
+        "text": "▶  RESUME" if paused else "Ⅱ  PAUSE",
+        "callback_data": "player:resume" if paused else "player:pause",
+        "style": "success" if paused else "primary",
+    }
+    return {
+        "inline_keyboard": [
             [
-                InlineKeyboardButton("✨ Replay", callback_data="player:replay"),
-                InlineKeyboardButton("⏸ Pause", callback_data="player:pause"),
-                InlineKeyboardButton("▶️ Resume", callback_data="player:resume"),
+                {"text": "↻  REPLAY", "callback_data": "player:replay", "style": "success"},
+                toggle,
             ],
             [
-                InlineKeyboardButton("⏭ Skip", callback_data="player:skip"),
-                InlineKeyboardButton("🔉 −10", callback_data="player:vol_down"),
-                InlineKeyboardButton("🔊 +10", callback_data="player:vol_up"),
+                {"text": "⏭  NEXT", "callback_data": "player:skip", "style": "primary"},
+                {"text": "☷  QUEUE", "callback_data": "player:queue", "style": "primary"},
             ],
             [
-                InlineKeyboardButton("📜 Queue", callback_data="player:queue"),
-                InlineKeyboardButton("💎 Stop", callback_data="player:stop"),
+                {"text": "－  VOLUME", "callback_data": "player:vol_down", "style": "primary"},
+                {"text": "＋  VOLUME", "callback_data": "player:vol_up", "style": "primary"},
+            ],
+            [
+                {"text": "■  STOP PLAYBACK", "callback_data": "player:stop", "style": "danger"},
             ],
         ]
+    }
+
+
+async def telegram_api(method: str, payload: dict, photo=None):
+    """Call Bot API directly so Bot API 9.4 native button styles are preserved."""
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/{method}"
+    timeout = aiohttp.ClientTimeout(total=45)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        if photo is not None:
+            form = aiohttp.FormData()
+            for key, value in payload.items():
+                if isinstance(value, (dict, list)):
+                    value = json.dumps(value, ensure_ascii=False)
+                form.add_field(key, str(value))
+            photo.seek(0)
+            form.add_field(
+                "photo", photo.read(), filename="xyron_music_player.png",
+                content_type="image/png",
+            )
+            async with session.post(url, data=form) as response:
+                data = await response.json()
+        else:
+            async with session.post(url, json=payload) as response:
+                data = await response.json()
+    if not data.get("ok"):
+        raise RuntimeError(f"Telegram Bot API {method} failed: {data.get('description', 'unknown error')}")
+    return data["result"]
+
+
+async def send_player_card(chat_id: int, cover, caption: str):
+    return await telegram_api(
+        "sendPhoto",
+        {
+            "chat_id": chat_id,
+            "caption": caption,
+            "parse_mode": "HTML",
+            "reply_markup": player_keyboard(chat_id),
+        },
+        photo=cover,
     )
+
+
+async def edit_player_card(chat_id: int, message_id: int, caption: str, *, with_keyboard=True):
+    payload = {
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "caption": caption,
+        "parse_mode": "HTML",
+    }
+    if with_keyboard:
+        payload["reply_markup"] = player_keyboard(chat_id)
+    else:
+        payload["reply_markup"] = {"inline_keyboard": []}
+    return await telegram_api("editMessageCaption", payload)
 
 def render_player(chat_id: int) -> str:
     track = players.get(chat_id)
@@ -274,13 +336,7 @@ async def update_progress(chat_id: int):
     while chat_id in players:
         track = players[chat_id]
         try:
-            await bot.edit_message_caption(
-                chat_id,
-                track["message_id"],
-                render_player(chat_id),
-                parse_mode=ParseMode.HTML,
-                reply_markup=player_keyboard(),
-            )
+            await edit_player_card(chat_id, track["message_id"], render_player(chat_id))
         except Exception:
             pass
         await asyncio.sleep(2)
@@ -341,14 +397,8 @@ async def start_track(chat_id: int, track: dict, message_id: int):
         requested_by=players[chat_id]["requested_by"],
         bot_username=PUBLIC_BOT_USERNAME,
     )
-    sent = await bot.send_photo(
-        chat_id,
-        photo=cover,
-        caption=render_player(chat_id),
-        parse_mode=ParseMode.HTML,
-        reply_markup=player_keyboard(),
-    )
-    players[chat_id]["message_id"] = sent.id
+    sent = await send_player_card(chat_id, cover, render_player(chat_id))
+    players[chat_id]["message_id"] = sent["message_id"]
     try:
         await bot.delete_messages(chat_id, message_id)
     except Exception:
@@ -580,7 +630,7 @@ async def player_controls(_, query):
                 await calls.leave_call(chat_id)
             except Exception:
                 pass
-            await query.message.edit_caption("⏹ Playback stopped and queue cleared.")
+            await edit_player_card(chat_id, query.message.id, "⏹ <b>Playback stopped.</b> Queue cleared.", with_keyboard=False)
             await query.answer("Stopped")
             return
         elif action in ("vol_down", "vol_up"):
@@ -591,13 +641,7 @@ async def player_controls(_, query):
             await calls.change_volume_call(chat_id, volume)
             players[chat_id]["volume"] = volume
             await query.answer(f"Volume: {volume}%")
-        await bot.edit_message_caption(
-            chat_id,
-            query.message.id,
-            render_player(chat_id),
-            parse_mode=ParseMode.HTML,
-            reply_markup=player_keyboard(),
-        )
+        await edit_player_card(chat_id, query.message.id, render_player(chat_id))
     except Exception as exc:
         await query.answer(f"Action failed: {exc}", show_alert=True)
 
@@ -676,12 +720,7 @@ async def np_command(_, message):
         requested_by=track.get("requested_by", "A group member"),
         bot_username=PUBLIC_BOT_USERNAME,
     )
-    await message.reply_photo(
-        photo=cover,
-        caption=render_player(chat_id),
-        parse_mode=ParseMode.HTML,
-        reply_markup=player_keyboard(),
-    )
+    await send_player_card(chat_id, cover, render_player(chat_id))
 
 
 @bot.on_message(filters.command("volume"))
