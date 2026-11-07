@@ -10,7 +10,7 @@ A Telegram group/channel voice-chat music bot using Pyrogram, Telethon and PyTgC
 - /newaccount — connect a voice-player account using a private Telegram QR login
 - /accounts — list connected player accounts
 - /myid — show your Telegram numeric user ID for OWNER_ID setup
-- Inline player controls
+- Inline player controls (group admins and the configured owner only)
 - Independent queue and controls for every group
 - Multiple simultaneous voice chats using separately authorized player accounts
 - FLAC downloads where available, plus the highest built-in PyTgCalls audio preset
@@ -26,7 +26,7 @@ You do not need to generate or paste session strings manually. Once the bot is r
 4. On the Telegram account you want to use as a player, open Settings → Devices → Link Desktop Device and scan the QR code.
 5. The bot confirms the account and stores its session locally. Use /accounts to see connected player accounts.
 
-**Security:** Only the configured owner can run account-management commands, and QR login is accepted only in private chat. Never forward the QR code; it is a temporary account-login credential. The bot does not ask for OTPs or two-step passwords in chat. Accounts that require an additional password step are not saved by this flow. Saved session strings are encrypted at rest in the local data/ directory, which is excluded from Git.
+**Security:** Only the configured owner can run account-management commands, and QR login is accepted only in private chat. Never forward the QR code; it is a temporary account-login credential. The bot does not ask for OTPs or two-step passwords in chat. Accounts that require an additional password step are not saved by this flow. Saved session strings are stored locally in plaintext, with restrictive directory/file permissions (0700/0600), and the data/ directory is excluded from Git. This is access control, not encryption; protect VPS access and backups accordingly.
 
 Each player account can serve one active voice chat at a time. Connect a separate account for each additional simultaneous group. The project supports up to 10 player accounts.
 
@@ -79,6 +79,10 @@ python bot.py
 | /newaccount | Owner-only QR account connection in private chat |
 | /accounts | Owner-only connected-account list |
 | /myid | Show your numeric Telegram user ID |
+
+## Playback permissions
+
+In groups, playback commands and inline controls are restricted to group administrators and the configured `OWNER_ID`. In private chats, only the configured owner can control playback.
 
 ## Audio quality
 
