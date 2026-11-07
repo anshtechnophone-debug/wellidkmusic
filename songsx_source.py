@@ -40,7 +40,7 @@ class SongsxSource:
     @staticmethod
     def _key(value):
         value = unicodedata.normalize("NFKC", value).casefold()
-        return re.sub(r"[^a-z0-9]+", " ", value).strip()
+        return re.sub(r"[^\\w]+", " ", value, flags=re.UNICODE).strip()
 
     @staticmethod
     def _is_audio(message):
