@@ -10,7 +10,7 @@ from typing import Optional
 import aiohttp
 from dotenv import load_dotenv
 from pyrogram import Client, filters
-from pyrogram.enums import ChatMemberStatus
+from pyrogram.enums import ChatMemberStatus, ParseMode
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from pytgcalls import filters as call_filters
 from pytgcalls.types import StreamEnded
@@ -274,6 +274,7 @@ async def update_progress(chat_id: int):
                 chat_id,
                 track["message_id"],
                 render_player(chat_id),
+                parse_mode=ParseMode.HTML,
                 reply_markup=player_keyboard(),
                 disable_web_page_preview=True,
             )
@@ -335,6 +336,7 @@ async def start_track(chat_id: int, track: dict, message_id: int):
         chat_id,
         message_id,
         render_player(chat_id),
+        parse_mode=ParseMode.HTML,
         reply_markup=player_keyboard(),
         disable_web_page_preview=True,
     )
@@ -552,6 +554,7 @@ async def player_controls(_, query):
             chat_id,
             query.message.id,
             render_player(chat_id),
+            parse_mode=ParseMode.HTML,
             reply_markup=player_keyboard(),
         )
     except Exception as exc:
