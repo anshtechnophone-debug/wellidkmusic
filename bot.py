@@ -9,6 +9,7 @@ from typing import Optional
 import aiohttp
 from dotenv import load_dotenv
 from pyrogram import Client, filters
+from pyrogram.enums import ChatMemberStatus
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from pytgcalls import filters as call_filters
 from pytgcalls.types import StreamEnded
@@ -22,6 +23,7 @@ API_ID = int(os.getenv("API_ID", "0"))
 API_HASH = os.getenv("API_HASH", "")
 SESSION_STRINGS = [value.strip() for value in os.getenv("SESSION_STRINGS", "").split(",") if value.strip()]
 JAMENDO_CLIENT_ID = os.getenv("JAMENDO_CLIENT_ID", "")
+OWNER_ID = int(os.getenv("OWNER_ID", "0") or 0)
 
 if not all((BOT_TOKEN, API_ID, API_HASH, JAMENDO_CLIENT_ID)):
     raise RuntimeError(
@@ -63,7 +65,7 @@ account_manager = AccountManager(
     call_pool=calls,
     api_id=API_ID,
     api_hash=API_HASH,
-    owner_id=os.getenv("OWNER_ID", ""),
+    owner_id=OWNER_ID,
     data_dir=BASE_DIR / "data",
 )
 
@@ -83,6 +85,29 @@ players = {}
 progress_tasks = {}
 locks = defaultdict(asyncio.Lock)
 
+
+
+async def can_control(chat, user):
+    """Allow the configured owner or administrators to control group playback."""
+    if not user:
+        return False
+    if OWNER_ID and user.id == OWNER_ID:
+        return True
+    if chat.type == "private":
+        return False
+    try:
+        member = await bot.get_chat_member(chat.id, user.id)
+        return member.status in (ChatMemberStatus.OWNER, ChatMemberStatus.ADMINISTRATOR)
+    except Exception:
+        log.exception("Could not verify playback permissions for user %s", user.id)
+        return False
+
+
+async def reject_control(message):
+    if not await can_control(message.chat, message.from_user):
+        await message.reply_text("⛔ Only group admins or the configured bot owner can control playback.")
+        return True
+    return False
 
 def fmt_time(seconds: Optional[float]) -> str:
     if seconds is None:
@@ -171,17 +196,23 @@ async def download_track(track: dict) -> Path:
     if file_path.exists() and file_path.stat().st_size > 20_000:
         return file_path
 
+    temporary_path = file_path.with_suffix(".flac.part")
+    temporary_path.unlink(missing_ok=True)
     timeout = aiohttp.ClientTimeout(total=180)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        async with session.get(download_url) as response:
-            response.raise_for_status()
-            with file_path.open("wb") as output:
-                async for chunk in response.content.iter_chunked(256 * 1024):
-                    output.write(chunk)
-    if file_path.stat().st_size < 20_000:
-        file_path.unlink(missing_ok=True)
-        raise RuntimeError("The audio download was incomplete.")
-    return file_path
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(download_url) as response:
+                response.raise_for_status()
+                with temporary_path.open("wb") as output:
+                    async for chunk in response.content.iter_chunked(256 * 1024):
+                        output.write(chunk)
+        if temporary_path.stat().st_size < 20_000:
+            raise RuntimeError("The audio download was incomplete.")
+        temporary_path.replace(file_path)
+        return file_path
+    except Exception:
+        temporary_path.unlink(missing_ok=True)
+        raise
 
 
 async def update_progress(chat_id: int):
@@ -391,6 +422,8 @@ async def choose_track(_, query):
 async def player_controls(_, query):
     chat_id = query.message.chat.id
     action = query.matches[0].group(1)
+    if not await can_control(query.message.chat, query.from_user):
+        return await query.answer("Only group admins or the bot owner can control playback.", show_alert=True)
     try:
         if action == "pause":
             await calls.pause(chat_id)
@@ -444,6 +477,8 @@ async def player_controls(_, query):
 
 @bot.on_message(filters.command("pause"))
 async def pause_command(_, message):
+    if await reject_control(message):
+        return
     await calls.pause(message.chat.id)
     if message.chat.id in players:
         players[message.chat.id]["paused_elapsed"] = int(time.monotonic() - players[message.chat.id]["started_at"])
@@ -453,6 +488,8 @@ async def pause_command(_, message):
 
 @bot.on_message(filters.command("resume"))
 async def resume_command(_, message):
+    if await reject_control(message):
+        return
     await calls.resume(message.chat.id)
     if message.chat.id in players:
         players[message.chat.id]["started_at"] = time.monotonic() - players[message.chat.id].get("paused_elapsed", 0)
@@ -462,6 +499,8 @@ async def resume_command(_, message):
 
 @bot.on_message(filters.command("skip"))
 async def skip_command(_, message):
+    if await reject_control(message):
+        return
     chat_id = message.chat.id
     try:
         await calls.leave_call(chat_id)
@@ -475,6 +514,8 @@ async def skip_command(_, message):
 
 @bot.on_message(filters.command("stop"))
 async def stop_command(_, message):
+    if await reject_control(message):
+        return
     chat_id = message.chat.id
     queues[chat_id].clear()
     await stop_progress(chat_id)
@@ -510,6 +551,8 @@ async def np_command(_, message):
 
 @bot.on_message(filters.command("volume"))
 async def volume_command(_, message):
+    if await reject_control(message):
+        return
     if len(message.command) < 2 or not message.command[1].isdigit():
         return await message.reply_text("Usage: /volume <1-200>")
     volume = max(1, min(200, int(message.command[1])))
