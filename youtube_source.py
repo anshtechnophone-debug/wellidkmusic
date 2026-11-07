@@ -26,7 +26,7 @@ def _search(query: str) -> list[dict[str, Any]]:
         if not item:
             continue
         video_id = item.get("id")
-        webpage_url = item.get("webpage_url") or item.get("url")
+        webpage_url = item.get("webpage_url")
         if not webpage_url and video_id:
             webpage_url = f"https://www.youtube.com/watch?v={video_id}"
         if not video_id or not webpage_url:
@@ -53,32 +53,6 @@ async def search_youtube_tracks(query: str) -> list[dict[str, Any]]:
     except Exception:
         log.exception("YouTube search failed for query %r", query)
         return []
-
-
-def _resolve(webpage_url: str) -> str:
-    options = {
-        "quiet": True,
-        "no_warnings": True,
-        "format": "bestaudio/best",
-        "noplaylist": True,
-        "skip_download": True,
-        "socket_timeout": 20,
-        "retries": 3,
-        "fragment_retries": 3,
-    }
-    with yt_dlp.YoutubeDL(options) as ydl:
-        info = ydl.extract_info(webpage_url, download=False)
-    if not info:
-        raise RuntimeError("YouTube did not return playable media information.")
-    stream_url = info.get("url")
-    if not stream_url and info.get("requested_formats"):
-        stream_url = next(
-            (item.get("url") for item in info["requested_formats"] if item.get("url")),
-            None,
-        )
-    if not stream_url:
-        raise RuntimeError("No compatible audio stream was returned for this video.")
-    return stream_url
 
 
 def _download(webpage_url: str, video_id: str, media_dir: str) -> str:
