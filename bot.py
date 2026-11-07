@@ -844,6 +844,8 @@ async def stop_command(_, message):
 
 @bot.on_message(filters.command("queue"))
 async def queue_command(_, message):
+    if not await require_channel_membership(message):
+        return
     chat_id = message.chat.id
     upcoming = list(queues[chat_id])
     if not upcoming:
@@ -854,6 +856,8 @@ async def queue_command(_, message):
 
 @bot.on_message(filters.command("np"))
 async def np_command(_, message):
+    if not await require_channel_membership(message):
+        return
     chat_id = message.chat.id
     if chat_id not in players:
         return await message.reply_text("🎵 Nothing is playing.")
