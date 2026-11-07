@@ -538,7 +538,7 @@ async def player_controls(_, query):
             else:
                 lines = [f"{i}. {item.get('name', 'Unknown')} — {item.get('artist_name', 'Unknown artist')}" for i, item in enumerate(upcoming[:15], 1)]
                 await query.answer("Queue sent")
-                await bot.send_message(chat_id, "📜 XYRON MUSIC QUEUE\\n" + "\\n".join(lines))
+                await bot.send_message(chat_id, "📜 XYRON MUSIC QUEUE\n" + "\n".join(lines))
             return
         if action == "replay":
             track = players.get(chat_id)
