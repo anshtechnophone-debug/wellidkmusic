@@ -15,6 +15,7 @@ from pytgcalls import filters as call_filters
 from pytgcalls.types import StreamEnded
 from player_pool import MultiCallPool
 from account_manager import AccountManager
+from youtube_source import search_youtube_tracks, resolve_youtube_stream
 
 load_dotenv()
 
@@ -238,18 +239,28 @@ async def stop_progress(chat_id: int):
 
 
 async def start_track(chat_id: int, track: dict, message_id: int):
-    audio_path = await download_track(track)
-    await calls.play(chat_id, str(audio_path))
+    if track.get("_source") == "youtube":
+        audio_source = await resolve_youtube_stream(track["webpage_url"])
+        await calls.play(chat_id, audio_source)
+        stored_path = None
+        license_url = track.get("license_url") or "https://www.youtube.com/t/terms"
+        source_url = track.get("webpage_url") or "https://www.youtube.com"
+    else:
+        audio_path = await download_track(track)
+        await calls.play(chat_id, str(audio_path))
+        stored_path = str(audio_path)
+        license_url = track.get("license_ccurl", "https://creativecommons.org/licenses/by/4.0/")
+        source_url = track.get("shareurl") or track.get("shorturl") or "https://www.jamendo.com"
     players[chat_id] = {
         "id": str(track["id"]),
         "title": track.get("name", "Unknown title"),
         "artist": track.get("artist_name", "Unknown artist"),
         "duration": int(track.get("duration") or 0),
-        "license_url": track.get("license_ccurl", "https://creativecommons.org/licenses/by/4.0/"),
-        "source_url": track.get("shareurl") or track.get("shorturl") or "https://www.jamendo.com",
+        "license_url": license_url,
+        "source_url": source_url,
         "started_at": time.monotonic(),
         "message_id": message_id,
-        "path": str(audio_path),
+        "path": stored_path,
         "volume": 100,
         "paused": False,
         "paused_elapsed": 0,
@@ -325,7 +336,7 @@ async def start_command(_, message):
     log.info("Handling /start from user_id=%s", message.from_user.id if message.from_user else "unknown")
     await message.reply_text(
         "🎧 **WELLIDK MUSIC**\n\n"
-        "Play Creative Commons music in your group's or channel's active voice chat.\n\n"
+        "Search YouTube and Jamendo, then play tracks in your group's or channel's active voice chat.\n\n"
         "**Commands**\n"
         "/play <song name> — search licensed tracks\n"
         "/pause /resume /skip /stop\n"
@@ -345,7 +356,7 @@ async def myid_command(_, message):
 async def help_command(_, message):
     await message.reply_text(
         "**🎵 WELLIDK MUSIC HELP**\n\n"
-        "• /play <name> — search and play CC BY / BY-SA music\n"
+        "• /play <name> — search YouTube and Jamendo tracks\n"
         "• /pause — pause playback\n"
         "• /resume — resume playback\n"
         "• /skip — skip current track\n"
@@ -364,11 +375,17 @@ async def play_command(_, message):
     if len(message.command) < 2:
         return await message.reply_text("Usage: /play <song name>")
     query = " ".join(message.command[1:]).strip()
-    status = await message.reply_text(f"🔎 Searching licensed tracks for **{query}**...")
+    status = await message.reply_text(f"🔎 Searching YouTube and Jamendo for **{query}**...")
     try:
-        results = await search_tracks(query)
+        results = await search_youtube_tracks(query)
+        jamendo_results = await search_tracks(query)
+        for item in jamendo_results:
+            item["_source"] = "jamendo"
+            item["id"] = f"jm_{item['id']}"
+        results.extend(jamendo_results)
+        results = results[:8]
         if not results:
-            return await status.edit_text("No matching Creative Commons tracks found. Try another title or artist.")
+            return await status.edit_text("No results found. Try another song title or artist.")
         if len(results) == 1:
             selected = results[0]
         else:
@@ -381,7 +398,7 @@ async def play_command(_, message):
                     callback_data=f"choose:{item['id']}"
                 )])
             await status.edit_text(
-                "🎼 **Choose a track**\nOnly tracks offered under CC BY / CC BY-SA are listed.",
+                "🎼 **Choose a track**\nYouTube and Jamendo results. Play only audio you are authorized to rebroadcast.",
                 reply_markup=InlineKeyboardMarkup(rows),
             )
             search_cache[message.chat.id] = {str(x["id"]): x for x in results}
@@ -402,7 +419,7 @@ async def play_command(_, message):
 search_cache = defaultdict(dict)
 
 
-@bot.on_callback_query(filters.regex(r"^choose:(\d+)$"))
+@bot.on_callback_query(filters.regex(r"^choose:([A-Za-z0-9_-]+)$"))
 async def choose_track(_, query):
     chat_id = query.message.chat.id
     track_id = query.matches[0].group(1)
