@@ -157,7 +157,7 @@ def render_player(chat_id: int) -> str:
         f"⏱ {fmt_time(elapsed)} {progress_bar(elapsed, duration)} {fmt_time(duration)}\n"
         f"⌛ Remaining: {fmt_time(remaining)}\n"
         f"🔊 Volume: {track.get('volume', 100)}%\n"
-        f"📄 [License]({track['license_url']}) · [Track source]({track['source_url']})\n"
+        f"📄 [Usage info]({track['license_url']}) · [Track source]({track['source_url']})\n"
         "━━━━━━━━━━━━━━━━━━"
     )
 
