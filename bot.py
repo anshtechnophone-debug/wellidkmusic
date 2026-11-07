@@ -138,6 +138,29 @@ async def send_subscription_prompt(user_id: int):
     )
 
 
+async def edit_song_choices(chat_id: int, message_id: int, results: list):
+    rows = []
+    for index, item in enumerate(results[:7]):
+        title = str(item.get("name", "Unknown"))[:35]
+        artist = str(item.get("artist_name", "Unknown artist"))[:20]
+        rows.append([{
+            "text": f"♫  {title} — {artist}",
+            "callback_data": f"choose:{item['id']}",
+            "style": "primary" if index % 2 == 0 else "success",
+        }])
+    return await telegram_api(
+        "editMessageText",
+        {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": "🎼 <b>CHOOSE YOUR TRACK</b>\\nSelect a song to add it to the group player:",
+            "parse_mode": "HTML",
+            "reply_markup": {"inline_keyboard": rows},
+            "disable_web_page_preview": True,
+        },
+    )
+
+
 async def require_channel_membership(message) -> bool:
     user = message.from_user
     if not user:
@@ -217,6 +240,8 @@ async def can_control(chat, user):
 
 
 async def reject_control(message):
+    if not await require_channel_membership(message):
+        return True
     if not await can_control(message.chat, message.from_user):
         await message.reply_text("⛔ Only group admins or the configured bot owner can control playback.")
         return True
@@ -642,18 +667,7 @@ async def play_command(_, message):
         if len(results) == 1:
             selected = results[0]
         else:
-            rows = []
-            for item in results:
-                title = item.get("name", "Unknown")
-                artist = item.get("artist_name", "Unknown artist")
-                rows.append([InlineKeyboardButton(
-                    f"{title[:35]} — {artist[:20]}",
-                    callback_data=f"choose:{item['id']}"
-                )])
-            await status.edit_text(
-                "🎼 **Choose a song**\nResults from Songsx:",
-                reply_markup=InlineKeyboardMarkup(rows),
-            )
+            await edit_song_choices(message.chat.id, status.id, results)
             search_cache[message.chat.id] = {str(x["id"]): x for x in results}
             return
         queues[message.chat.id].append(selected)
@@ -699,6 +713,13 @@ async def choose_track(_, query):
 
 @bot.on_callback_query(filters.regex(r"^player:(replay|pause|resume|skip|stop|queue|vol_down|vol_up)$"))
 async def player_controls(_, query):
+    if not await is_channel_member(query.from_user.id):
+        await query.answer("Join @xyronschannel before using music controls.", show_alert=True)
+        try:
+            await send_subscription_prompt(query.from_user.id)
+        except Exception:
+            pass
+        return
     chat_id = query.message.chat.id
     action = query.matches[0].group(1)
     if not await can_control(query.message.chat, query.from_user):
