@@ -15,7 +15,7 @@ from pytgcalls import filters as call_filters
 from pytgcalls.types import StreamEnded
 from player_pool import MultiCallPool
 from account_manager import AccountManager
-from youtube_source import search_youtube_tracks, resolve_youtube_stream
+from youtube_source import search_youtube_tracks, download_youtube_track
 
 load_dotenv()
 
@@ -240,9 +240,11 @@ async def stop_progress(chat_id: int):
 
 async def start_track(chat_id: int, track: dict, message_id: int):
     if track.get("_source") == "youtube":
-        audio_source = await resolve_youtube_stream(track["webpage_url"])
+        audio_source = await download_youtube_track(
+            track["webpage_url"], track["video_id"], str(MEDIA_DIR)
+        )
         await calls.play(chat_id, audio_source)
-        stored_path = None
+        stored_path = audio_source
         license_url = track.get("license_url") or "https://www.youtube.com/t/terms"
         source_url = track.get("webpage_url") or "https://www.youtube.com"
     else:
@@ -378,7 +380,11 @@ async def play_command(_, message):
     status = await message.reply_text(f"🔎 Searching YouTube and Jamendo for **{query}**...")
     try:
         results = await search_youtube_tracks(query)
-        jamendo_results = await search_tracks(query)
+        try:
+            jamendo_results = await search_tracks(query)
+        except Exception:
+            log.exception("Jamendo search failed; continuing with YouTube results")
+            jamendo_results = []
         for item in jamendo_results:
             item["_source"] = "jamendo"
             item["id"] = f"jm_{item['id']}"
