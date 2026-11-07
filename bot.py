@@ -28,6 +28,7 @@ SESSION_STRINGS = [value.strip() for value in os.getenv("SESSION_STRINGS", "").s
 JAMENDO_CLIENT_ID = os.getenv("JAMENDO_CLIENT_ID", "")
 OWNER_ID = int(os.getenv("OWNER_ID", "0") or 0)
 SONGSX_BOT_USERNAME = os.getenv("SONGSX_BOT_USERNAME", "Songsx_bot")
+PUBLIC_BOT_USERNAME = os.getenv("BOT_USERNAME", "").lstrip("@")
 AUDIO_CACHE_CHANNEL_ID = os.getenv("AUDIO_CACHE_CHANNEL_ID", "4363096287")
 
 if not all((BOT_TOKEN, API_ID, API_HASH)):
@@ -163,14 +164,14 @@ def player_keyboard():
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("⏸ Pause", callback_data="player:pause"),
-                InlineKeyboardButton("▶️ Resume", callback_data="player:resume"),
-                InlineKeyboardButton("⏭ Skip", callback_data="player:skip"),
+                InlineKeyboardButton("🟠 ⏸ PAUSE", callback_data="player:pause"),
+                InlineKeyboardButton("🟢 ▶️ RESUME", callback_data="player:resume"),
+                InlineKeyboardButton("🔵 ⏭ NEXT", callback_data="player:skip"),
             ],
             [
-                InlineKeyboardButton("🔉 -10", callback_data="player:vol_down"),
-                InlineKeyboardButton("🔊 +10", callback_data="player:vol_up"),
-                InlineKeyboardButton("⏹ Stop", callback_data="player:stop"),
+                InlineKeyboardButton("🔉 VOL −", callback_data="player:vol_down"),
+                InlineKeyboardButton("🔊 VOL +", callback_data="player:vol_up"),
+                InlineKeyboardButton("🔴 ⏹ STOP", callback_data="player:stop"),
             ],
         ]
     )
@@ -182,22 +183,32 @@ def render_player(chat_id: int) -> str:
         return "🎵 Nothing is playing right now."
     duration = int(track.get("duration") or 0)
     elapsed_now = track.get("paused_elapsed", 0) if track.get("paused") else int(time.monotonic() - track["started_at"])
-    elapsed = min(duration, int(elapsed_now))
+    elapsed = min(duration, int(elapsed_now)) if duration else int(elapsed_now)
     remaining = max(0, duration - elapsed) if duration else 0
-    if track.get("source") == "songsx":
-        source_line = f"📡 [Audio source]({track['source_url']})"
+    title = str(track.get("title") or "Unknown title").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    artist = str(track.get("artist") or "Unknown artist").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    username = PUBLIC_BOT_USERNAME or "this bot"
+    bot_url = f"https://t.me/{username}" if PUBLIC_BOT_USERNAME else "https://t.me/"
+    status = "⏸ PAUSED" if track.get("paused") else "🔴 PLAYING"
+    if duration:
+        progress = progress_bar(elapsed, duration, width=18)
+        time_line = f"<code>{fmt_time(elapsed)}</code>  {progress}  <code>{fmt_time(duration)}</code>"
+        remaining_line = f"⌛ <b>{fmt_time(remaining)}</b> remaining"
     else:
-        source_line = f"📄 [Usage info]({track['license_url']}) · [Track source]({track['source_url']})"
+        time_line = f"<code>{fmt_time(elapsed)}</code>  🔴 LIVE"
+        remaining_line = "⌛ Live stream"
     return (
-        "🎧 **WELLIDK MUSIC PLAYER**\n"
-        "━━━━━━━━━━━━━━━━━━\n"
-        f"🎵 **{track['title']}**\n"
-        f"👤 Artist: {track['artist']}\n"
-        f"⏱ {fmt_time(elapsed)} {progress_bar(elapsed, duration)} {fmt_time(duration)}\n"
-        f"⌛ Remaining: {fmt_time(remaining)}\n"
-        f"🔊 Volume: {track.get('volume', 100)}%\n"
-        f"{source_line}\n"
-        "━━━━━━━━━━━━━━━━━━"
+        "╭━━━ 🎧 <b>WELLIDK MUSIC</b> ━━━╮\n"
+        f"┃  <b>{status}</b>\n"
+        "┣━━━━━━━━━━━━━━━━━━\n"
+        f"┃ 🎵 <b>{title}</b>\n"
+        f"┃ 🎤 {artist}\n"
+        "┣━━━━━━━━━━━━━━━━━━\n"
+        f"┃ {time_line}\n"
+        f"┃ {remaining_line}\n"
+        f"┃ 🔊 Volume  <b>{track.get('volume', 100)}%</b>\n"
+        "╰━━━━━━━━━━━━━━━━━━╯\n"
+        f"✨ <a href=\"{bot_url}\">WELLIDK Music</a>"
     )
 
 
@@ -268,7 +279,7 @@ async def update_progress(chat_id: int):
             )
         except Exception:
             pass
-        await asyncio.sleep(8)
+        await asyncio.sleep(2)
 
 
 async def stop_progress(chat_id: int):
@@ -285,7 +296,7 @@ async def start_track(chat_id: int, track: dict, message_id: int):
         await calls.play(chat_id, str(audio_path))
         stored_path = str(audio_path)
         license_url = ""
-        source_url = track.get("source_url") or "https://t.me/Songsx_bot"
+        source_url = f"https://t.me/{PUBLIC_BOT_USERNAME}" if PUBLIC_BOT_USERNAME else "https://t.me/"
         source_name = "songsx"
     elif track.get("_source") == "youtube":
         audio_source = await download_youtube_track(
@@ -433,7 +444,7 @@ async def play_command(_, message):
     if len(message.command) < 2:
         return await message.reply_text("Usage: /play <song name>")
     query = " ".join(message.command[1:]).strip()
-    status = await message.reply_text(f"🔎 Searching @{SONGSX_BOT_USERNAME.lstrip('@')} for **{query}**...")
+    status = await message.reply_text(f"🔎 Finding tracks for **{query}**...")
     try:
         results = await songsx_source.search(query, account_manager.clients)
         results = results[:7]
@@ -646,6 +657,8 @@ async def main():
         await account_manager.load_existing()
         await calls.start()
         me = await bot.get_me()
+        global PUBLIC_BOT_USERNAME
+        PUBLIC_BOT_USERNAME = me.username or PUBLIC_BOT_USERNAME
         log.info("Started as @%s with %s voice-player account(s)", me.username, len(calls.clients))
         print("WELLIDK MUSIC is running. Press Ctrl+C to stop.")
         await asyncio.Event().wait()
