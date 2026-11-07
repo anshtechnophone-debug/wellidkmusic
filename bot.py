@@ -165,14 +165,17 @@ def player_keyboard():
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("🟠 ⏸ PAUSE", callback_data="player:pause"),
-                InlineKeyboardButton("🟢 ▶️ RESUME", callback_data="player:resume"),
-                InlineKeyboardButton("🔵 ⏭ NEXT", callback_data="player:skip"),
+                InlineKeyboardButton("✨ Replay", callback_data="player:replay"),
+                InlineKeyboardButton("⏸ Pause", callback_data="player:pause"),
+                InlineKeyboardButton("⏭ Skip", callback_data="player:skip"),
             ],
             [
-                InlineKeyboardButton("🔉 VOL −", callback_data="player:vol_down"),
-                InlineKeyboardButton("🔊 VOL +", callback_data="player:vol_up"),
-                InlineKeyboardButton("🔴 ⏹ STOP", callback_data="player:stop"),
+                InlineKeyboardButton("🔉 −10", callback_data="player:vol_down"),
+                InlineKeyboardButton("🔊 +10", callback_data="player:vol_up"),
+                InlineKeyboardButton("📜 Queue", callback_data="player:queue"),
+            ],
+            [
+                InlineKeyboardButton("💎 Stop", callback_data="player:stop"),
             ],
         ]
     )
@@ -521,14 +524,34 @@ async def choose_track(_, query):
         )
 
 
-@bot.on_callback_query(filters.regex(r"^player:(pause|resume|skip|stop|vol_down|vol_up)$"))
+@bot.on_callback_query(filters.regex(r"^player:(replay|pause|resume|skip|stop|queue|vol_down|vol_up)$"))
 async def player_controls(_, query):
     chat_id = query.message.chat.id
     action = query.matches[0].group(1)
     if not await can_control(query.message.chat, query.from_user):
         return await query.answer("Only group admins or the bot owner can control playback.", show_alert=True)
     try:
-        if action == "pause":
+        if action == "queue":
+            upcoming = list(queues[chat_id])
+            if not upcoming:
+                await query.answer("The queue is empty.", show_alert=True)
+            else:
+                lines = [f"{i}. {item.get('name', 'Unknown')} — {item.get('artist_name', 'Unknown artist')}" for i, item in enumerate(upcoming[:15], 1)]
+                await query.answer("Queue sent")
+                await bot.send_message(chat_id, "📜 <b>XYRON MUSIC QUEUE</b>\\n" + "\\n".join(lines), parse_mode=ParseMode.HTML)
+            return
+        if action == "replay":
+            track = players.get(chat_id)
+            if not track:
+                return await query.answer("Nothing is playing.", show_alert=True)
+            await calls.leave_call(chat_id)
+            await ensure_player_in_group(chat_id)
+            await calls.play(chat_id, track["path"])
+            track["started_at"] = time.monotonic()
+            track["paused_elapsed"] = 0
+            track["paused"] = False
+            await query.answer("Playing from the beginning")
+        elif action == "pause":
             await calls.pause(chat_id)
             if chat_id in players:
                 players[chat_id]["paused_elapsed"] = int(time.monotonic() - players[chat_id]["started_at"])
