@@ -322,6 +322,7 @@ async def on_stream_end(_: MultiCallPool, update: StreamEnded):
 
 @bot.on_message(filters.command("start"))
 async def start_command(_, message):
+    log.info("Handling /start from user_id=%s", message.from_user.id if message.from_user else "unknown")
     await message.reply_text(
         "🎧 **WELLIDK MUSIC**\n\n"
         "Play Creative Commons music in your group's or channel's active voice chat.\n\n"
@@ -336,6 +337,7 @@ async def start_command(_, message):
 
 @bot.on_message(filters.command("myid") & filters.private)
 async def myid_command(_, message):
+    log.info("Handling /myid from user_id=%s", message.from_user.id if message.from_user else "unknown")
     await message.reply_text(f"Your Telegram user ID: `{message.from_user.id}`")
 
 
@@ -596,4 +598,21 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    # Pyrogram 2.0 captures the current event loop in Client.__init__.
+    # The Client is created at module import time, so run main() on that
+    # exact loop instead of asyncio.run(), which would create a second loop.
+    loop = asyncio.get_event_loop()
+    if bot.loop is not loop:
+        raise RuntimeError("Pyrogram client and application are using different event loops.")
+    try:
+        loop.run_until_complete(main())
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if not loop.is_closed():
+            pending = asyncio.all_tasks(loop)
+            for task in pending:
+                task.cancel()
+            if pending:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            loop.close()
