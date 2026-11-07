@@ -468,7 +468,7 @@ async def play_command(_, message):
         if not results:
             return await status.edit_text("Songsx returned no song results. Try another title or artist.")
         requester = message.from_user
-        requester_name = (requester.first_name or "Telegram user") if requester else "Telegram user"
+        requester_name = " ".join(part for part in [requester.first_name, requester.last_name] if part) if requester else "Telegram user"
         requester_username = f"@{requester.username}" if requester and requester.username else ""
         for item in results:
             item["requested_by"] = requester_name
