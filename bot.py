@@ -167,19 +167,19 @@ def player_keyboard():
             [
                 InlineKeyboardButton("✨ Replay", callback_data="player:replay"),
                 InlineKeyboardButton("⏸ Pause", callback_data="player:pause"),
-                InlineKeyboardButton("⏭ Skip", callback_data="player:skip"),
+                InlineKeyboardButton("▶️ Resume", callback_data="player:resume"),
             ],
             [
+                InlineKeyboardButton("⏭ Skip", callback_data="player:skip"),
                 InlineKeyboardButton("🔉 −10", callback_data="player:vol_down"),
                 InlineKeyboardButton("🔊 +10", callback_data="player:vol_up"),
-                InlineKeyboardButton("📜 Queue", callback_data="player:queue"),
             ],
             [
+                InlineKeyboardButton("📜 Queue", callback_data="player:queue"),
                 InlineKeyboardButton("💎 Stop", callback_data="player:stop"),
             ],
         ]
     )
-
 
 def render_player(chat_id: int) -> str:
     track = players.get(chat_id)
