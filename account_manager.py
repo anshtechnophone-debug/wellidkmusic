@@ -44,20 +44,25 @@ class AccountManager:
             return {}
 
     def _write_store(self):
+        # Telegram session strings are credentials. Restrict access from the
+        # moment the temporary file is created, then atomically replace the store.
         temporary = self.store_path.with_suffix(".tmp")
-        temporary.write_text(
-            json.dumps(self.accounts, indent=2, sort_keys=True),
-            encoding="utf-8",
-        )
+        payload = json.dumps(self.accounts, indent=2, sort_keys=True)
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         try:
-            temporary.chmod(0o600)
-        except OSError:
-            pass
-        temporary.replace(self.store_path)
-        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as output:
+                output.write(payload)
+                output.flush()
+                os.fsync(output.fileno())
+            os.replace(temporary, self.store_path)
             self.store_path.chmod(0o600)
-        except OSError:
-            pass
+        except Exception:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            temporary.unlink(missing_ok=True)
+            raise
 
     def _is_owner(self, message):
         return bool(self.owner_id and message.from_user and message.from_user.id == self.owner_id)
@@ -102,6 +107,7 @@ class AccountManager:
             "Settings → Devices → Link Desktop Device.\n\n"
             "Never forward the QR code. It authorizes access to your account."
         )
+        qr_message_ids = []
         try:
             await client.connect()
             qr = await client.qr_login()
@@ -115,16 +121,22 @@ class AccountManager:
                 image_buffer.name = "telegram-login.png"
                 qr_image.save(image_buffer, format="PNG")
                 image_buffer.seek(0)
-                await self.bot.send_photo(
+                qr_message = await self.bot.send_photo(
                     message.chat.id,
                     image_buffer,
                     caption="Scan this QR from Telegram → Settings → Devices → Link Desktop Device. "
                             "This code expires quickly; a refreshed code will be sent automatically if needed.",
                 )
+                qr_message_ids.append(qr_message.id)
                 try:
                     await qr.wait(timeout=min(25, remaining))
                     break
                 except asyncio.TimeoutError:
+                    try:
+                        await self.bot.delete_messages(message.chat.id, qr_message_ids)
+                    except Exception:
+                        log.debug("Could not remove an expired QR message", exc_info=True)
+                    qr_message_ids.clear()
                     await qr.recreate()
 
             me = await client.get_me()
@@ -177,6 +189,11 @@ class AccountManager:
             log.exception("Player account QR login failed")
             await status.edit_text(f"❌ Could not connect the account: {type(exc).__name__}")
         finally:
+            if qr_message_ids:
+                try:
+                    await self.bot.delete_messages(message.chat.id, qr_message_ids)
+                except Exception:
+                    log.debug("Could not remove temporary QR messages", exc_info=True)
             if client.is_connected():
                 await client.disconnect()
 
