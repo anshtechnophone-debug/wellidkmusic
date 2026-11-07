@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from datetime import datetime, timedelta, timezone
 import os
 import time
 from collections import defaultdict, deque
@@ -115,6 +116,34 @@ async def reject_control(message):
         await message.reply_text("⛔ Only group admins or the configured bot owner can control playback.")
         return True
     return False
+
+
+async def ensure_player_in_group(chat_id: int):
+    """Use the bot's invite permission to add the assigned voice account to this group."""
+    if chat_id >= 0:
+        raise RuntimeError("Music playback is available in groups, not private chats.")
+    if not account_manager.clients:
+        raise RuntimeError("No connected Telegram user account. Send /newaccount to WELLIDK in private chat first.")
+
+    invite = await bot.create_chat_invite_link(
+        chat_id,
+        member_limit=1,
+        expire_date=datetime.now(timezone.utc) + timedelta(minutes=5),
+        name="WELLIDK voice player",
+    )
+    try:
+        member = await calls.ensure_member(
+            chat_id,
+            invite.invite_link,
+            preferred_client=account_manager.clients[0],
+        )
+        log.info("Voice player account %s joined/confirmed in group %s", member.id, chat_id)
+        return member
+    finally:
+        try:
+            await bot.revoke_chat_invite_link(chat_id, invite.invite_link)
+        except Exception:
+            log.debug("Could not revoke temporary voice-player invite", exc_info=True)
 
 def fmt_time(seconds: Optional[float]) -> str:
     if seconds is None:
@@ -249,6 +278,8 @@ async def stop_progress(chat_id: int):
 
 
 async def start_track(chat_id: int, track: dict, message_id: int):
+    # Make sure the exact MTProto account assigned to this voice chat is a group member.
+    await ensure_player_in_group(chat_id)
     if track.get("_source") == "songsx":
         audio_path = await songsx_source.download_selected(track)
         await calls.play(chat_id, str(audio_path))
@@ -324,7 +355,12 @@ async def play_next(chat_id: int, message_id: Optional[int] = None):
             await start_track(chat_id, track, status_message_id)
         except Exception as exc:
             log.exception("Could not start queued track")
-            await bot.send_message(chat_id, f"⚠️ Could not play **{track.get('name', 'track')}**: {exc}")
+            error_text = str(exc)
+            if "no active group call" in error_text.lower():
+                error_text = "No active voice chat. Start a group voice chat first, then run /play again."
+            elif "invite" in error_text.lower() or "chat_admin_required" in error_text.lower() or "not enough rights" in error_text.lower():
+                error_text = f"I couldn't invite the voice-player account. Make WELLIDK an admin with **Invite Users** permission. ({type(exc).__name__})"
+            await bot.send_message(chat_id, f"⚠️ Could not play **{track.get('name', 'track')}**: {error_text}")
             await play_next_unlocked(chat_id, status_message_id)
 
 
@@ -386,8 +422,8 @@ async def help_command(_, message):
         "• /queue — show upcoming tracks\n"
         "• /np — show the current player\n"
         "• /volume <1-200> — change volume\n\n"
-        "The group's or channel's voice chat must already be active. "
-        "The assistant account must be able to join and speak.",
+        "WELLIDK needs admin permission to invite users. It will automatically invite its connected voice-player account. "
+        "A group voice chat must already be active, and the player account must be allowed to speak.",
         disable_web_page_preview=True,
     )
 
