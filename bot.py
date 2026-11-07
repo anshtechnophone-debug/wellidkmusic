@@ -238,12 +238,39 @@ async def reject_control(message):
     return False
 
 
+async def handle_player_handoff(old_chat_id: int, new_chat_id: int):
+    """Clean up the group whose voice-player account is being moved elsewhere."""
+    await stop_progress(old_chat_id)
+    old_track = players.pop(old_chat_id, None)
+    queues[old_chat_id].clear()
+    if old_track:
+        try:
+            await edit_player_card(
+                old_chat_id,
+                old_track["message_id"],
+                "🔀 <b>XYRON MUSIC moved to another group's voice chat.</b> Playback stopped here.",
+                with_keyboard=False,
+            )
+        except Exception:
+            pass
+    try:
+        await bot.send_message(
+            old_chat_id,
+            "🔀 XYRON MUSIC has moved to another group's voice chat. Use /play whenever you want to start music here again.",
+        )
+    except Exception:
+        pass
+
+
+calls.set_handoff_handler(handle_player_handoff)
+
+
 async def ensure_player_in_group(chat_id: int):
     """Use the bot's invite permission to add the assigned voice account to this group."""
     if chat_id >= 0:
         raise RuntimeError("Music playback is available in groups, not private chats.")
     if not account_manager.clients:
-        raise RuntimeError("No connected Telegram user account. Send /newaccount to **@MusicXyronrobot** in private chat first.")
+        raise RuntimeError("No voice-player account is connected. Please contact the bot owner.")
 
     invite = await bot.create_chat_invite_link(
         chat_id,
