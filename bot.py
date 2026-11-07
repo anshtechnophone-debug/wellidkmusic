@@ -18,6 +18,7 @@ from player_pool import MultiCallPool
 from account_manager import AccountManager
 from youtube_source import search_youtube_tracks, download_youtube_track
 from songsx_source import SongsxSource
+from player_art import make_player_cover
 
 load_dotenv()
 
@@ -270,13 +271,12 @@ async def update_progress(chat_id: int):
     while chat_id in players:
         track = players[chat_id]
         try:
-            await bot.edit_message_text(
+            await bot.edit_message_caption(
                 chat_id,
                 track["message_id"],
                 render_player(chat_id),
                 parse_mode=ParseMode.HTML,
                 reply_markup=player_keyboard(),
-                disable_web_page_preview=True,
             )
         except Exception:
             pass
@@ -319,6 +319,8 @@ async def start_track(chat_id: int, track: dict, message_id: int):
         "id": str(track["id"]),
         "title": track.get("name", "Unknown title"),
         "artist": track.get("artist_name", "Unknown artist"),
+        "requested_by": track.get("requested_by", "A group member"),
+        "requested_by_username": track.get("requested_by_username", ""),
         "duration": int(track.get("duration") or 0),
         "license_url": license_url,
         "source_url": source_url,
@@ -330,16 +332,26 @@ async def start_track(chat_id: int, track: dict, message_id: int):
         "paused": False,
         "paused_elapsed": 0,
     }
-    await stop_progress(chat_id)
-    progress_tasks[chat_id] = asyncio.create_task(update_progress(chat_id))
-    await bot.edit_message_text(
+    cover = make_player_cover(
+        title=players[chat_id]["title"],
+        artist=players[chat_id]["artist"],
+        requested_by=players[chat_id]["requested_by"],
+        bot_username=PUBLIC_BOT_USERNAME,
+    )
+    sent = await bot.send_photo(
         chat_id,
-        message_id,
-        render_player(chat_id),
+        photo=cover,
+        caption=render_player(chat_id),
         parse_mode=ParseMode.HTML,
         reply_markup=player_keyboard(),
-        disable_web_page_preview=True,
     )
+    players[chat_id]["message_id"] = sent.id
+    try:
+        await bot.delete_messages(chat_id, message_id)
+    except Exception:
+        pass
+    await stop_progress(chat_id)
+    progress_tasks[chat_id] = asyncio.create_task(update_progress(chat_id))
 
 
 async def play_next(chat_id: int, message_id: Optional[int] = None):
@@ -452,6 +464,12 @@ async def play_command(_, message):
         results = results[:7]
         if not results:
             return await status.edit_text("Songsx returned no song results. Try another title or artist.")
+        requester = message.from_user
+        requester_name = (requester.first_name or "Telegram user") if requester else "Telegram user"
+        requester_username = f"@{requester.username}" if requester and requester.username else ""
+        for item in results:
+            item["requested_by"] = requester_name
+            item["requested_by_username"] = requester_username
         if len(results) == 1:
             selected = results[0]
         else:
@@ -539,7 +557,7 @@ async def player_controls(_, query):
                 await calls.leave_call(chat_id)
             except Exception:
                 pass
-            await query.message.edit_text("⏹ Playback stopped and queue cleared.")
+            await query.message.edit_caption("⏹ Playback stopped and queue cleared.")
             await query.answer("Stopped")
             return
         elif action in ("vol_down", "vol_up"):
@@ -550,7 +568,7 @@ async def player_controls(_, query):
             await calls.change_volume_call(chat_id, volume)
             players[chat_id]["volume"] = volume
             await query.answer(f"Volume: {volume}%")
-        await bot.edit_message_text(
+        await bot.edit_message_caption(
             chat_id,
             query.message.id,
             render_player(chat_id),
@@ -628,10 +646,18 @@ async def np_command(_, message):
     chat_id = message.chat.id
     if chat_id not in players:
         return await message.reply_text("🎵 Nothing is playing.")
-    await message.reply_text(
-        render_player(chat_id),
+    track = players[chat_id]
+    cover = make_player_cover(
+        title=track.get("title", "Unknown title"),
+        artist=track.get("artist", "Unknown artist"),
+        requested_by=track.get("requested_by", "A group member"),
+        bot_username=PUBLIC_BOT_USERNAME,
+    )
+    await message.reply_photo(
+        photo=cover,
+        caption=render_player(chat_id),
+        parse_mode=ParseMode.HTML,
         reply_markup=player_keyboard(),
-        disable_web_page_preview=True,
     )
 
 
