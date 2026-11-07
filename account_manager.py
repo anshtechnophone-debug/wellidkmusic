@@ -90,8 +90,6 @@ class AccountManager:
             return await message.reply_text("Set OWNER_ID in .env to your numeric Telegram user ID, then restart the bot.")
         if not self._is_owner(message):
             return await message.reply_text("⛔ This command is available only to the configured bot owner.")
-        if message.chat.type != "private":
-            return await message.reply_text("For account safety, use /newaccount in the bot's private chat.")
         if len(self.call_pool.clients) >= 10:
             return await message.reply_text("The total player-account limit is 10.")
         if self._login_lock.locked():
