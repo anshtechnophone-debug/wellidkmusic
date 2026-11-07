@@ -40,7 +40,7 @@ class SongsxSource:
     @staticmethod
     def _key(value):
         value = unicodedata.normalize("NFKC", value).casefold()
-        return re.sub(r"[^\\w]+", " ", value, flags=re.UNICODE).strip()
+        return re.sub(r"[^\w]+", " ", value, flags=re.UNICODE).strip()
 
     @staticmethod
     def _is_audio(message):
@@ -123,10 +123,13 @@ class SongsxSource:
     async def _cache_peer(self, client):
         if not self.raw_cache_channel_id:
             raise RuntimeError("AUDIO_CACHE_CHANNEL_ID is not configured.")
-        raw_id = abs(self.raw_cache_channel_id)
         marked_id = self.raw_cache_channel_id
-        if marked_id > 0:
-            marked_id = int("-100" + str(raw_id))
+        if marked_id <= -1000000000000:
+            raw_id = -marked_id - 1000000000000
+        else:
+            raw_id = abs(marked_id)
+            if marked_id > 0:
+                marked_id = int("-100" + str(raw_id))
         try:
             return await client.get_input_entity(marked_id)
         except Exception:
