@@ -30,7 +30,8 @@ SESSION_STRINGS = [value.strip() for value in os.getenv("SESSION_STRINGS", "").s
 JAMENDO_CLIENT_ID = os.getenv("JAMENDO_CLIENT_ID", "")
 OWNER_ID = int(os.getenv("OWNER_ID", "0") or 0)
 SONGSX_BOT_USERNAME = os.getenv("SONGSX_BOT_USERNAME", "Songsx_bot")
-PUBLIC_BOT_USERNAME = os.getenv("BOT_USERNAME", "").lstrip("@")
+PUBLIC_BOT_USERNAME = os.getenv("BOT_USERNAME", "MusicXyronrobot").lstrip("@")
+XYRON_CHANNEL = os.getenv("XYRON_CHANNEL", "@xyronschannel")
 AUDIO_CACHE_CHANNEL_ID = os.getenv("AUDIO_CACHE_CHANNEL_ID", "4363096287")
 
 if not all((BOT_TOKEN, API_ID, API_HASH)):
@@ -95,6 +96,107 @@ queues = defaultdict(deque)
 players = {}
 progress_tasks = {}
 locks = defaultdict(asyncio.Lock)
+
+
+
+async def is_channel_member(user_id: int) -> bool:
+    try:
+        member = await bot.get_chat_member(XYRON_CHANNEL, user_id)
+        return member.status in (
+            ChatMemberStatus.OWNER,
+            ChatMemberStatus.ADMINISTRATOR,
+            ChatMemberStatus.MEMBER,
+        ) or bool(getattr(member, "is_member", False))
+    except Exception:
+        log.exception("Could not verify channel membership for user %s", user_id)
+        return False
+
+
+def subscription_keyboard():
+    return {
+        "inline_keyboard": [
+            [{"text": "📢 JOIN XYRON CHANNEL", "url": "https://t.me/xyronschannel", "style": "primary"}],
+            [{"text": "✅ CONFIRM MEMBERSHIP", "callback_data": "subscription:confirm", "style": "success"}],
+        ]
+    }
+
+
+async def send_subscription_prompt(user_id: int):
+    return await telegram_api(
+        "sendMessage",
+        {
+            "chat_id": user_id,
+            "text": (
+                "🔒 <b>One quick step before playing music</b>\\n\\n"
+                "Join <b>XYRON's official channel</b>, then tap Confirm Membership. "
+                "Once verified, you can use /play in your groups."
+            ),
+            "parse_mode": "HTML",
+            "reply_markup": subscription_keyboard(),
+            "disable_web_page_preview": True,
+        },
+    )
+
+
+async def require_channel_membership(message) -> bool:
+    user = message.from_user
+    if not user:
+        await message.reply_text("I couldn't identify your Telegram account. Please try again.")
+        return False
+    if await is_channel_member(user.id):
+        return True
+    try:
+        await send_subscription_prompt(user.id)
+        await message.reply_text(
+            "🔒 Please join **@xyronschannel** and confirm your membership in my private chat. "
+            "I've sent you the verification button."
+        )
+    except Exception:
+        await message.reply_text(
+            "🔒 To use XYRON MUSIC, first open @MusicXyronrobot in private chat and send /start. "
+            "Then join @xyronschannel and confirm membership."
+        )
+    return False
+
+
+@bot.on_callback_query(filters.regex(r"^subscription:confirm$"))
+async def confirm_subscription(_, query):
+    if await is_channel_member(query.from_user.id):
+        await query.answer("Membership confirmed! Music is unlocked.", show_alert=True)
+        try:
+            await query.message.edit_text(
+                "✅ <b>You're verified!</b>\\n\\n"
+                "Add @MusicXyronrobot to your group and use <code>/play song name</code>.",
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception:
+            pass
+    else:
+        await query.answer(
+            "I can't see your membership yet. Join @xyronschannel first, then try again.",
+            show_alert=True,
+        )
+
+
+@bot.on_message(filters.new_chat_members)
+async def bot_added_to_group(_, message):
+    me = await bot.get_me()
+    if not any(member.id == me.id for member in (message.new_chat_members or [])):
+        return
+    adder = message.from_user
+    if not adder:
+        return
+    try:
+        await send_subscription_prompt(adder.id)
+        await message.reply_text(
+            f"👋 Thanks for adding **@{PUBLIC_BOT_USERNAME}**! "
+            "The person who added me must join @xyronschannel and confirm membership in my DM before using /play."
+        )
+    except Exception:
+        await message.reply_text(
+            f"👋 Thanks for adding **@{PUBLIC_BOT_USERNAME}**! "
+            "Please open my private chat, send /start, then join @xyronschannel and confirm membership before using /play."
+        )
 
 
 
@@ -467,18 +569,24 @@ async def on_stream_end(_: MultiCallPool, update: StreamEnded):
     await play_next(chat_id)
 
 
-@bot.on_message(filters.command("start"))
+@bot.on_message(filters.command("start") & filters.private)
 async def start_command(_, message):
-    log.info("Handling /start from user_id=%s", message.from_user.id if message.from_user else "unknown")
-    await message.reply_text(
-        "🎧 **WELLIDK MUSIC**\n\n"
-        "Search Songsx and play returned audio in your group's active voice chat.\n\n"
-        "**Commands**\n"
-        "/play <song name> — search Songsx\n"
-        "/pause /resume /skip /stop\n"
-        "/queue /np /volume <1-200>\n"
-        "/help — setup and commands",
-        disable_web_page_preview=True,
+    keyboard = subscription_keyboard()
+    await telegram_api(
+        "sendMessage",
+        {
+            "chat_id": message.chat.id,
+            "text": (
+                "🎧 <b>XYRON MUSIC</b>\\n\\n"
+                "I'm your group's music player. Add <b>@MusicXyronrobot</b> to a group, "
+                "start its voice chat, and use <code>/play song name</code>.\\n\\n"
+                "Before playing, join <b>@xyronschannel</b> and confirm below.\\n\\n"
+                "Use /help to see the commands."
+            ),
+            "parse_mode": "HTML",
+            "reply_markup": keyboard,
+            "disable_web_page_preview": True,
+        },
     )
 
 
@@ -491,23 +599,31 @@ async def myid_command(_, message):
 @bot.on_message(filters.command("help"))
 async def help_command(_, message):
     await message.reply_text(
-        "**🎵 WELLIDK MUSIC HELP**\n\n"
-        "• /play <name> — search Songsx and choose a result\n"
-        "• /pause — pause playback\n"
-        "• /resume — resume playback\n"
-        "• /skip — skip current track\n"
-        "• /stop — clear queue and leave voice chat\n"
-        "• /queue — show upcoming tracks\n"
-        "• /np — show the current player\n"
-        "• /volume <1-200> — change volume\n\n"
-        "WELLIDK needs admin permission to invite users. It will automatically invite its connected voice-player account. "
-        "A group voice chat must already be active, and the player account must be allowed to speak.",
+        "🎧 **XYRON MUSIC — HELP**\\n\\n"
+        "**Start here**\\n"
+        "• Add @MusicXyronrobot to your group\\n"
+        "• Start the group's voice chat\\n"
+        "• Use /play song name\\n\\n"
+        "**Commands**\\n"
+        "• /play <song name> — find and play a song\\n"
+        "• /pause — pause playback\\n"
+        "• /resume — resume playback\\n"
+        "• /skip — skip the current song\\n"
+        "• /stop — stop playback and clear the queue\\n"
+        "• /queue — show upcoming songs\\n"
+        "• /np — show the current player\\n"
+        "• /volume <1-200> — change volume\\n\\n"
+        "Playback controls are also available as inline buttons on the player card. "
+        "Join @xyronschannel and confirm membership before using music. "
+        "The bot needs permission to invite its voice-player account; the voice chat must already be active.",
         disable_web_page_preview=True,
     )
 
 
 @bot.on_message(filters.command("play"))
 async def play_command(_, message):
+    if not await require_channel_membership(message):
+        return
     if len(message.command) < 2:
         return await message.reply_text("Usage: /play <song name>")
     query = " ".join(message.command[1:]).strip()
@@ -558,6 +674,13 @@ search_cache = defaultdict(dict)
 
 @bot.on_callback_query(filters.regex(r"^choose:([A-Za-z0-9_-]+)$"))
 async def choose_track(_, query):
+    if not await is_channel_member(query.from_user.id):
+        await query.answer("Join @xyronschannel and confirm membership before selecting tracks.", show_alert=True)
+        try:
+            await send_subscription_prompt(query.from_user.id)
+        except Exception:
+            pass
+        return
     chat_id = query.message.chat.id
     track_id = query.matches[0].group(1)
     track = search_cache.get(chat_id, {}).get(track_id)
