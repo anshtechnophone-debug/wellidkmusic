@@ -186,32 +186,32 @@ def render_player(chat_id: int) -> str:
     elapsed_now = track.get("paused_elapsed", 0) if track.get("paused") else int(time.monotonic() - track["started_at"])
     elapsed = min(duration, int(elapsed_now)) if duration else int(elapsed_now)
     remaining = max(0, duration - elapsed) if duration else 0
-    title = str(track.get("title") or "Unknown title").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    artist = str(track.get("artist") or "Unknown artist").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    username = PUBLIC_BOT_USERNAME or "this bot"
-    bot_url = f"https://t.me/{username}" if PUBLIC_BOT_USERNAME else "https://t.me/"
-    status = "⏸ PAUSED" if track.get("paused") else "🔴 PLAYING"
+    esc = lambda value: str(value or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    title = esc(track.get("title") or "Unknown title")
+    artist = esc(track.get("artist") or "Unknown artist")
+    requested_by = esc(track.get("requested_by") or "A group member")
+    requested_username = esc(track.get("requested_by_username") or "")
+    username = PUBLIC_BOT_USERNAME or "XYRON Music"
+    bot_url = f"https://t.me/{PUBLIC_BOT_USERNAME}" if PUBLIC_BOT_USERNAME else "https://t.me/"
+    status = "⏸ <b>PAUSED</b>" if track.get("paused") else "🟢 <b>NOW PLAYING</b>"
     if duration:
-        progress = progress_bar(elapsed, duration, width=18)
+        progress = progress_bar(elapsed, duration, width=20)
         time_line = f"<code>{fmt_time(elapsed)}</code>  {progress}  <code>{fmt_time(duration)}</code>"
-        remaining_line = f"⌛ <b>{fmt_time(remaining)}</b> remaining"
+        remaining_line = f"⏳ <b>{fmt_time(remaining)}</b> left"
     else:
         time_line = f"<code>{fmt_time(elapsed)}</code>  🔴 LIVE"
-        remaining_line = "⌛ Live stream"
+        remaining_line = "⏳ Live stream"
+    requester = f"{requested_by} {requested_username}".strip()
     return (
-        "╭━━━ 🎧 <b>WELLIDK MUSIC</b> ━━━╮\n"
-        f"┃  <b>{status}</b>\n"
-        "┣━━━━━━━━━━━━━━━━━━\n"
-        f"┃ 🎵 <b>{title}</b>\n"
-        f"┃ 🎤 {artist}\n"
-        "┣━━━━━━━━━━━━━━━━━━\n"
-        f"┃ {time_line}\n"
-        f"┃ {remaining_line}\n"
-        f"┃ 🔊 Volume  <b>{track.get('volume', 100)}%</b>\n"
-        "╰━━━━━━━━━━━━━━━━━━╯\n"
-        f"✨ <a href=\"{bot_url}\">WELLIDK Music</a>"
+        f"🎧 <b>XYRON MUSIC</b>  ·  {status}\n"
+        f"🎵 <b>{title}</b>\n"
+        f"🎤 {artist}\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"{time_line}\n"
+        f"{remaining_line}  ·  🔊 {track.get('volume', 100)}%\n"
+        f"👤 <b>Requested by:</b> {requester}\n"
+        f"✨ <a href=\"{bot_url}\">{esc(username)}</a>"
     )
-
 
 async def search_tracks(query: str):
     url = "https://api.jamendo.com/v3.0/tracks/"
