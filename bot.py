@@ -127,7 +127,7 @@ async def send_subscription_prompt(user_id: int):
         {
             "chat_id": user_id,
             "text": (
-                "🔒 <b>One quick step before playing music</b>\\n\\n"
+                "🔒 <b>One quick step before playing music</b>\n\n"
                 "Join <b>XYRON's official channel</b>, then tap Confirm Membership. "
                 "Once verified, you can use /play in your groups."
             ),
@@ -153,7 +153,7 @@ async def edit_song_choices(chat_id: int, message_id: int, results: list):
         {
             "chat_id": chat_id,
             "message_id": message_id,
-            "text": "🎼 <b>CHOOSE YOUR TRACK</b>\\nSelect a song to add it to the group player:",
+            "text": "🎼 <b>CHOOSE YOUR TRACK</b>\nSelect a song to add it to the group player:",
             "parse_mode": "HTML",
             "reply_markup": {"inline_keyboard": rows},
             "disable_web_page_preview": True,
@@ -188,7 +188,7 @@ async def confirm_subscription(_, query):
         await query.answer("Membership confirmed! Music is unlocked.", show_alert=True)
         try:
             await query.message.edit_text(
-                "✅ <b>You're verified!</b>\\n\\n"
+                "✅ <b>You're verified!</b>\n\n"
                 "Add @MusicXyronrobot to your group and use <code>/play song name</code>.",
                 parse_mode=ParseMode.HTML,
             )
@@ -602,10 +602,10 @@ async def start_command(_, message):
         {
             "chat_id": message.chat.id,
             "text": (
-                "🎧 <b>XYRON MUSIC</b>\\n\\n"
+                "🎧 <b>XYRON MUSIC</b>\n\n"
                 "I'm your group's music player. Add <b>@MusicXyronrobot</b> to a group, "
-                "start its voice chat, and use <code>/play song name</code>.\\n\\n"
-                "Before playing, join <b>@xyronschannel</b> and confirm below.\\n\\n"
+                "start its voice chat, and use <code>/play song name</code>.\n\n"
+                "Before playing, join <b>@xyronschannel</b> and confirm below.\n\n"
                 "Use /help to see the commands."
             ),
             "parse_mode": "HTML",
@@ -624,20 +624,20 @@ async def myid_command(_, message):
 @bot.on_message(filters.command("help"))
 async def help_command(_, message):
     await message.reply_text(
-        "🎧 **XYRON MUSIC — HELP**\\n\\n"
-        "**Start here**\\n"
-        "• Add @MusicXyronrobot to your group\\n"
-        "• Start the group's voice chat\\n"
-        "• Use /play song name\\n\\n"
-        "**Commands**\\n"
-        "• /play <song name> — find and play a song\\n"
-        "• /pause — pause playback\\n"
-        "• /resume — resume playback\\n"
-        "• /skip — skip the current song\\n"
-        "• /stop — stop playback and clear the queue\\n"
-        "• /queue — show upcoming songs\\n"
-        "• /np — show the current player\\n"
-        "• /volume <1-200> — change volume\\n\\n"
+        "🎧 **XYRON MUSIC — HELP**\n\n"
+        "**Start here**\n"
+        "• Add @MusicXyronrobot to your group\n"
+        "• Start the group's voice chat\n"
+        "• Use /play song name\n\n"
+        "**Commands**\n"
+        "• /play <song name> — find and play a song\n"
+        "• /pause — pause playback\n"
+        "• /resume — resume playback\n"
+        "• /skip — skip the current song\n"
+        "• /stop — stop playback and clear the queue\n"
+        "• /queue — show upcoming songs\n"
+        "• /np — show the current player\n"
+        "• /volume <1-200> — change volume\n\n"
         "Playback controls are also available as inline buttons on the player card. "
         "Join @xyronschannel and confirm membership before using music. "
         "The bot needs permission to invite its voice-player account; the voice chat must already be active.",
