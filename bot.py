@@ -16,6 +16,7 @@ from pytgcalls.types import StreamEnded
 from player_pool import MultiCallPool
 from account_manager import AccountManager
 from youtube_source import search_youtube_tracks, download_youtube_track
+from songsx_source import SongsxSource
 
 load_dotenv()
 
@@ -25,11 +26,11 @@ API_HASH = os.getenv("API_HASH", "")
 SESSION_STRINGS = [value.strip() for value in os.getenv("SESSION_STRINGS", "").split(",") if value.strip()]
 JAMENDO_CLIENT_ID = os.getenv("JAMENDO_CLIENT_ID", "")
 OWNER_ID = int(os.getenv("OWNER_ID", "0") or 0)
+SONGSX_BOT_USERNAME = os.getenv("SONGSX_BOT_USERNAME", "Songsx_bot")
+AUDIO_CACHE_CHANNEL_ID = os.getenv("AUDIO_CACHE_CHANNEL_ID", "4363096287")
 
-if not all((BOT_TOKEN, API_ID, API_HASH, JAMENDO_CLIENT_ID)):
-    raise RuntimeError(
-        "Missing BOT_TOKEN, API_ID, API_HASH or JAMENDO_CLIENT_ID in .env"
-    )
+if not all((BOT_TOKEN, API_ID, API_HASH)):
+    raise RuntimeError("Missing BOT_TOKEN, API_ID or API_HASH in .env")
 if len(SESSION_STRINGS) > 10:
     raise RuntimeError("SESSION_STRINGS supports up to 10 separate authorized sessions.")
 if len(set(SESSION_STRINGS)) != len(SESSION_STRINGS):
@@ -68,6 +69,11 @@ account_manager = AccountManager(
     api_hash=API_HASH,
     owner_id=OWNER_ID,
     data_dir=BASE_DIR / "data",
+)
+songsx_source = SongsxSource(
+    bot_username=SONGSX_BOT_USERNAME,
+    cache_channel_id=AUDIO_CACHE_CHANNEL_ID,
+    media_dir=MEDIA_DIR,
 )
 
 
@@ -149,6 +155,10 @@ def render_player(chat_id: int) -> str:
     elapsed_now = track.get("paused_elapsed", 0) if track.get("paused") else int(time.monotonic() - track["started_at"])
     elapsed = min(duration, int(elapsed_now))
     remaining = max(0, duration - elapsed) if duration else 0
+    if track.get("source") == "songsx":
+        source_line = f"📡 [Audio source]({track['source_url']})"
+    else:
+        source_line = f"📄 [Usage info]({track['license_url']}) · [Track source]({track['source_url']})"
     return (
         "🎧 **WELLIDK MUSIC PLAYER**\n"
         "━━━━━━━━━━━━━━━━━━\n"
@@ -157,7 +167,7 @@ def render_player(chat_id: int) -> str:
         f"⏱ {fmt_time(elapsed)} {progress_bar(elapsed, duration)} {fmt_time(duration)}\n"
         f"⌛ Remaining: {fmt_time(remaining)}\n"
         f"🔊 Volume: {track.get('volume', 100)}%\n"
-        f"📄 [Usage info]({track['license_url']}) · [Track source]({track['source_url']})\n"
+        f"{source_line}\n"
         "━━━━━━━━━━━━━━━━━━"
     )
 
@@ -239,7 +249,14 @@ async def stop_progress(chat_id: int):
 
 
 async def start_track(chat_id: int, track: dict, message_id: int):
-    if track.get("_source") == "youtube":
+    if track.get("_source") == "songsx":
+        audio_path = await songsx_source.download_selected(track)
+        await calls.play(chat_id, str(audio_path))
+        stored_path = str(audio_path)
+        license_url = ""
+        source_url = track.get("source_url") or "https://t.me/Songsx_bot"
+        source_name = "songsx"
+    elif track.get("_source") == "youtube":
         audio_source = await download_youtube_track(
             track["webpage_url"], track["video_id"], str(MEDIA_DIR)
         )
@@ -247,12 +264,14 @@ async def start_track(chat_id: int, track: dict, message_id: int):
         stored_path = audio_source
         license_url = track.get("license_url") or "https://www.youtube.com/t/terms"
         source_url = track.get("webpage_url") or "https://www.youtube.com"
+        source_name = "youtube"
     else:
         audio_path = await download_track(track)
         await calls.play(chat_id, str(audio_path))
         stored_path = str(audio_path)
         license_url = track.get("license_ccurl", "https://creativecommons.org/licenses/by/4.0/")
         source_url = track.get("shareurl") or track.get("shorturl") or "https://www.jamendo.com"
+        source_name = "jamendo"
     players[chat_id] = {
         "id": str(track["id"]),
         "title": track.get("name", "Unknown title"),
@@ -260,6 +279,7 @@ async def start_track(chat_id: int, track: dict, message_id: int):
         "duration": int(track.get("duration") or 0),
         "license_url": license_url,
         "source_url": source_url,
+        "source": source_name,
         "started_at": time.monotonic(),
         "message_id": message_id,
         "path": stored_path,
@@ -338,9 +358,9 @@ async def start_command(_, message):
     log.info("Handling /start from user_id=%s", message.from_user.id if message.from_user else "unknown")
     await message.reply_text(
         "🎧 **WELLIDK MUSIC**\n\n"
-        "Search YouTube and Jamendo, then play tracks in your group's or channel's active voice chat.\n\n"
+        "Search Songsx and play returned audio in your group's active voice chat.\n\n"
         "**Commands**\n"
-        "/play <song name> — search licensed tracks\n"
+        "/play <song name> — search Songsx\n"
         "/pause /resume /skip /stop\n"
         "/queue /np /volume <1-200>\n"
         "/help — setup and commands",
@@ -358,7 +378,7 @@ async def myid_command(_, message):
 async def help_command(_, message):
     await message.reply_text(
         "**🎵 WELLIDK MUSIC HELP**\n\n"
-        "• /play <name> — search YouTube and Jamendo tracks\n"
+        "• /play <name> — search Songsx and choose a result\n"
         "• /pause — pause playback\n"
         "• /resume — resume playback\n"
         "• /skip — skip current track\n"
@@ -377,26 +397,17 @@ async def play_command(_, message):
     if len(message.command) < 2:
         return await message.reply_text("Usage: /play <song name>")
     query = " ".join(message.command[1:]).strip()
-    status = await message.reply_text(f"🔎 Searching YouTube and Jamendo for **{query}**...")
+    status = await message.reply_text(f"🔎 Searching @{SONGSX_BOT_USERNAME.lstrip('@')} for **{query}**...")
     try:
-        results = await search_youtube_tracks(query)
-        try:
-            jamendo_results = await search_tracks(query)
-        except Exception:
-            log.exception("Jamendo search failed; continuing with YouTube results")
-            jamendo_results = []
-        for item in jamendo_results:
-            item["_source"] = "jamendo"
-            item["id"] = f"jm_{item['id']}"
-        results.extend(jamendo_results)
-        results = results[:8]
+        results = await songsx_source.search(query, account_manager.clients)
+        results = results[:7]
         if not results:
-            return await status.edit_text("No results found. Try another song title or artist.")
+            return await status.edit_text("Songsx returned no song results. Try another title or artist.")
         if len(results) == 1:
             selected = results[0]
         else:
             rows = []
-            for item in results[:8]:
+            for item in results:
                 title = item.get("name", "Unknown")
                 artist = item.get("artist_name", "Unknown artist")
                 rows.append([InlineKeyboardButton(
@@ -404,22 +415,22 @@ async def play_command(_, message):
                     callback_data=f"choose:{item['id']}"
                 )])
             await status.edit_text(
-                "🎼 **Choose a track**\nYouTube and Jamendo results. Play only audio you are authorized to rebroadcast.",
+                "🎼 **Choose a song**\nResults from Songsx:",
                 reply_markup=InlineKeyboardMarkup(rows),
             )
             search_cache[message.chat.id] = {str(x["id"]): x for x in results}
             return
         queues[message.chat.id].append(selected)
         if message.chat.id not in players:
-            await status.edit_text("⏳ Preparing your track...")
+            await status.edit_text("⏳ Fetching audio and preparing the voice chat...")
             await play_next(message.chat.id, status.id)
         else:
             await status.edit_text(
                 f"➕ Added to queue: **{selected.get('name')}** — {selected.get('artist_name')}"
             )
     except Exception as exc:
-        log.exception("Search/play failed")
-        await status.edit_text(f"❌ Couldn't search or play that track: {exc}")
+        log.exception("Songsx search/play failed")
+        await status.edit_text(f"❌ Couldn't search Songsx or play that track: {type(exc).__name__}: {exc}")
 
 
 search_cache = defaultdict(dict)
