@@ -243,7 +243,7 @@ async def ensure_player_in_group(chat_id: int):
     if chat_id >= 0:
         raise RuntimeError("Music playback is available in groups, not private chats.")
     if not account_manager.clients:
-        raise RuntimeError("No connected Telegram user account. Send /newaccount to WELLIDK in private chat first.")
+        raise RuntimeError("No connected Telegram user account. Send /newaccount to **@MusicXyronrobot** in private chat first.")
 
     invite = await bot.create_chat_invite_link(
         chat_id,
@@ -554,7 +554,7 @@ async def play_next(chat_id: int, message_id: Optional[int] = None):
             if "no active group call" in error_text.lower():
                 error_text = "No active voice chat. Start a group voice chat first, then run /play again."
             elif "invite" in error_text.lower() or "chat_admin_required" in error_text.lower() or "not enough rights" in error_text.lower():
-                error_text = f"I couldn't invite the voice-player account. Make WELLIDK an admin with **Invite Users** permission. ({type(exc).__name__})"
+                error_text = f"I couldn't invite the voice-player account. Make **@MusicXyronrobot** an admin with **Invite Users** permission. ({type(exc).__name__})"
             await bot.send_message(chat_id, f"⚠️ Could not play **{track.get('name', 'track')}**: {error_text}")
             await play_next_unlocked(chat_id, status_message_id)
 
