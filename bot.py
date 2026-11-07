@@ -206,21 +206,11 @@ async def bot_added_to_group(_, message):
     me = await bot.get_me()
     if not any(member.id == me.id for member in (message.new_chat_members or [])):
         return
-    adder = message.from_user
-    if not adder:
-        return
-    try:
-        await send_subscription_prompt(adder.id)
-        await message.reply_text(
-            f"👋 Thanks for adding **@{PUBLIC_BOT_USERNAME}**! "
-            "The person who added me must join @xyronschannel and confirm membership in my DM before using /play."
-        )
-    except Exception:
-        await message.reply_text(
-            f"👋 Thanks for adding **@{PUBLIC_BOT_USERNAME}**! "
-            "Please open my private chat, send /start, then join @xyronschannel and confirm membership before using /play."
-        )
-
+    await message.reply_text(
+        f"👋 Thanks for adding **@{PUBLIC_BOT_USERNAME}**! "
+        "Enjoy the music! 🎧\\n\\n"
+        "Start the group's voice chat, then use **/play song name** to play music."
+    )
 
 
 async def can_control(chat, user):
