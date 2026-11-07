@@ -1,10 +1,10 @@
 # WELLIDK MUSIC
 
-A Telegram group/channel voice-chat music bot using Pyrogram, Telethon and PyTgCalls. Song search is powered by Jamendo and is restricted to tracks offered under Creative Commons Attribution (CC BY) or Attribution-ShareAlike (CC BY-SA). Check each track's license and attribution requirements before using it.
+A Telegram group/channel voice-chat music bot using Pyrogram, Telethon, PyTgCalls and FFmpeg. `/play` searches YouTube first and Jamendo second. YouTube audio is resolved and downloaded only when a selected track starts; Jamendo playback remains restricted to downloads explicitly allowed by Jamendo under CC BY / CC BY-SA.
 
 ## Features
 
-- /play <song name> — search licensed tracks and choose a result
+- /play <song name> — search YouTube and Jamendo, then choose a result
 - /pause, /resume, /skip, /stop
 - /queue, /np, /volume <1-200>
 - /newaccount — connect a voice-player account using a private Telegram QR login
@@ -36,7 +36,7 @@ Each player account can serve one active voice chat at a time. Connect a separat
 - FFmpeg installed and available as ffmpeg
 - Telegram bot token from BotFather
 - Telegram API ID and API hash from my.telegram.org
-- Jamendo API client ID
+- Jamendo API client ID (YouTube search/playback uses yt-dlp)
 - Your numeric Telegram user ID for OWNER_ID
 
 API_ID and API_HASH are required once in .env because Pyrogram needs them to initialize the bot client and the QR player login. They are not requested inside the bot. Keep them private.
@@ -68,7 +68,7 @@ python bot.py
 
 | Command | Action |
 |---|---|
-| /play <name> | Search licensed music |
+| /play <name> | Search YouTube and Jamendo |
 | /pause | Pause |
 | /resume | Resume |
 | /skip | Skip current track |
@@ -90,6 +90,7 @@ The player requests FLAC downloads from Jamendo and PyTgCalls' Studio preset. FL
 
 ## Notes
 
-- This project intentionally does not rip audio from YouTube or other services. Search results come from Jamendo's CC BY / BY-SA catalog.
+- YouTube playback uses yt-dlp and FFmpeg. Deployers are responsible for obtaining and maintaining all permissions required for each recording and composition, and for complying with YouTube's applicable terms. Do not enable playback for content you are not authorized to rebroadcast.
+- Jamendo results are filtered to tracks with downloads enabled and CC BY / CC BY-SA licenses.
 - Each connected player account is a separate Telegram authorization. Never share its session or the local data/ directory.
 - Keep FFmpeg installed. A Linux VPS is recommended for reliable continuous multi-group playback; Android/Termux may have native-library or background-process limitations.
