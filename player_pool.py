@@ -1,5 +1,8 @@
 import asyncio
+import re
 
+from telethon.errors import UserAlreadyParticipantError
+from telethon.tl.functions.messages import ImportChatInviteRequest
 from pytgcalls import PyTgCalls
 from pytgcalls.types import AudioQuality, MediaStream
 
@@ -74,7 +77,7 @@ class MultiCallPool:
         self.chat_to_slot.clear()
         self.slot_to_chat.clear()
 
-    async def _instance_for(self, chat_id, allocate=False):
+    async def _instance_for(self, chat_id, allocate=False, preferred_client=None):
         slot = self.chat_to_slot.get(chat_id)
         if slot is not None:
             return self.instances[slot]
@@ -85,6 +88,12 @@ class MultiCallPool:
             slot = self.chat_to_slot.get(chat_id)
             if slot is not None:
                 return self.instances[slot]
+            if preferred_client in self.clients:
+                preferred_index = self.clients.index(preferred_client)
+                if preferred_index not in self.slot_to_chat:
+                    self.chat_to_slot[chat_id] = preferred_index
+                    self.slot_to_chat[preferred_index] = chat_id
+                    return self.instances[preferred_index]
             for index, instance in enumerate(self.instances):
                 if index not in self.slot_to_chat:
                     self.chat_to_slot[chat_id] = index
@@ -95,6 +104,24 @@ class MultiCallPool:
             f"All {len(self.instances)} player account(s) are busy. "
             "Connect another account with /newaccount for another simultaneous group."
         )
+
+    async def ensure_member(self, chat_id, invite_link, preferred_client=None):
+        """Join the player session assigned to this chat using a bot-created invite."""
+        await self._instance_for(chat_id, allocate=True, preferred_client=preferred_client)
+        slot = self.chat_to_slot[chat_id]
+        client = self.clients[slot]
+        invite_hash = invite_link.rstrip("/").split("/")[-1].split("?")[0]
+        invite_hash = invite_hash.lstrip("+")
+        if not invite_hash or invite_hash.lower() == "joinchat":
+            raise RuntimeError("Telegram returned an invalid group invite link.")
+        me = await client.get_me()
+        try:
+            await client(ImportChatInviteRequest(invite_hash))
+        except UserAlreadyParticipantError:
+            pass
+        # Confirm the account can now resolve the target chat before PyTgCalls joins.
+        await client.get_entity(chat_id)
+        return me
 
     async def play(self, chat_id, source):
         instance = await self._instance_for(chat_id, allocate=True)
