@@ -19,6 +19,11 @@ class MultiCallPool:
         self._client_lock = asyncio.Lock()
         self._update_handlers = []
         self._started = False
+        self._handoff_handler = None
+
+    def set_handoff_handler(self, handler):
+        """Register a callback to clean up the previous group after account handoff."""
+        self._handoff_handler = handler
 
     def _register_update_handler(self, instance, update_filter, handler):
         async def wrapped(_, update, _handler=handler):
@@ -100,10 +105,28 @@ class MultiCallPool:
                     self.slot_to_chat[index] = chat_id
                     return instance
 
-        raise RuntimeError(
-            f"All {len(self.instances)} player account(s) are busy. "
-            "Connect another account with /newaccount for another simultaneous group."
-        )
+            # Every account is already in another group's voice chat.
+            # Move the first available account to the newly requested group.
+            if self.instances:
+                index = 0
+                old_chat_id = self.slot_to_chat.get(index)
+                if old_chat_id is not None:
+                    try:
+                        await self.instances[index].leave_call(old_chat_id)
+                    except Exception:
+                        pass
+                    self.chat_to_slot.pop(old_chat_id, None)
+                    self.slot_to_chat.pop(index, None)
+                    if self._handoff_handler:
+                        try:
+                            await self._handoff_handler(old_chat_id, chat_id)
+                        except Exception:
+                            pass
+                self.chat_to_slot[chat_id] = index
+                self.slot_to_chat[index] = chat_id
+                return self.instances[index]
+
+        raise RuntimeError("No voice-player account is connected. Please contact the bot owner.")
 
     async def ensure_member(self, chat_id, invite_link, preferred_client=None):
         """Join the player session assigned to this chat using a bot-created invite."""
